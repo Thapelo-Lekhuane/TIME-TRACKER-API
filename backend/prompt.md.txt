@@ -550,3 +550,669 @@ Ensure:
   - Hours worked are clearly represented.
 
 Work strictly in **phases**: finish a phase, ensure build/tests pass, then move on. Do not skip steps or merge phases silently.
+
+
+
+
+new prompt
+You are working on a NestJS + TypeScript + PostgreSQL project called time-tracker-api.
+Your job is to finish the backend and generate a simple frontend for an internal employee attendance & time‑tracking system.
+
+Before making any changes, you must:
+
+Scan the whole codebase (src/**, any frontend/app folders, config, etc.) so you understand what already exists (entities, modules, services, controllers, Swagger setup).
+Maintain a phased to‑do list and complete each phase carefully before moving to the next.
+Do not skip steps or silently merge multiple phases.
+At each phase, prefer extending/refactoring over deleting working code.
+Ensure the project compiles and existing tests pass before moving on.
+Do not remove working code unless absolutely necessary; prefer to extend and refactor.
+
+Phase 0 – Understand the current state
+Inspect these files and folders in detail:
+
+src/main.ts, src/app.module.ts, src/app.bootstrap.ts
+src/config/**
+src/common/**
+src/modules/auth/**
+src/modules/users/**
+src/modules/campaigns/**
+src/modules/event-types/**
+src/modules/time-events/**
+src/modules/leave/**
+src/modules/timesheets/**
+src/modules/reports/**
+Any frontend/ or app folders.
+Summarise internally (do not print) what is:
+
+Already working (e.g. login, admin bootstrap, existing CRUD).
+Partially implemented.
+Missing (gaps in entities, endpoints, or services).
+Only after you understand the existing architecture and code, proceed to Phase 1.
+
+Phase 1 – Domain model completeness
+Ensure the following entities exist and are correctly mapped with TypeORM. Reuse or adjust existing entities where possible.
+
+All timestamps must be stored as UTC (TIMESTAMPTZ).
+Ensure User and Campaign both have a timeZone (IANA string).
+
+Also integrate the WFM domain requirements:
+
+Each agent must have a unique, permanent identifier that remains constant across their lifecycle, including rehires (e.g. employeeCode or uniqueAgentId, unique and not reused for different people).
+
+When an agent becomes Terminated / Leaver, they should be marked as such (e.g. status = 'TERMINATED' and/or a specific LeaveType) and:
+
+Their record is logically moved to a “Leavers” view (separate table or filtered query).
+All historical attendance data remains intact; no deletion of time events or leave.
+The system must support employees moving between:
+
+Training → Production
+Campaign A → Campaign B
+Without losing attendance history. Historical data must stay linked to the same unique agent identifier.
+Entities
+User
+
+Fields (include or adjust existing accordingly):
+id (primary key)
+uniqueAgentId or employeeCode (permanent unique identifier, required, unique)
+email
+passwordHash
+fullName
+designation
+role (enum: ADMIN, MANAGER, EMPLOYEE)
+status (e.g. ACTIVE, TRAINING, SUSPENDED, TERMINATED, etc.)
+timeZone (IANA string)
+campaign (FK → Campaign)
+(Optionally) teamName or relation to a “team”/team leader to support team filtering.
+Campaign
+
+Fields:
+id
+name
+description
+defaultTimeZone (IANA string)
+Schedule fields (shift configuration per campaign):
+workDayStart
+workDayEnd
+lunchStart
+lunchEnd
+teaBreaks as JSONB (or a separate table if cleaner).
+These schedules must be used when computing Shifts and validating time events.
+EventType
+
+Fields:
+id
+name (unique)
+category (enum: WORK, BREAK, LEAVE, OTHER)
+isPaid (boolean)
+isBreak (boolean)
+active (boolean)
+TimeEvent
+
+Fields:
+id
+user (FK → User)
+campaign (FK → Campaign)
+eventType (FK → EventType)
+timestampUtc (TIMESTAMPTZ, stored in UTC)
+source (enum: WEB, MOBILE, DESKTOP)
+LeaveType
+
+Fields:
+
+id
+name (unique, ordered list from Excel leave column)
+paid (boolean)
+fullDayAllowed (boolean)
+halfDayAllowed (boolean)
+active (boolean)
+displayOrder (int) to control output ordering in reports.
+Must support (at minimum) these statuses (names exactly as below where practical):
+
+Present
+Annual Leave
+Sick Leave
+Birthday Leave
+Family Responsibility Leave
+Absent
+Terminated / Leaver
+Lieu Day
+Day Off
+Annual Leave Half Day
+Sick Leave Half Day
+Family Responsibility Leave Half Day
+Maternity Leave
+Paternity Leave
+AWOL
+Unpaid Half Day
+Suspension
+Training
+Unpaid Leave
+Redeployment
+LeaveRequest
+
+Fields:
+id
+user (FK → User)
+campaign (FK → Campaign)
+leaveType (FK → LeaveType)
+startUtc (TIMESTAMPTZ)
+endUtc (TIMESTAMPTZ)
+status (enum: PENDING, APPROVED, REJECTED, CANCELED)
+approvedBy (FK → User or nullable)
+approvedAt (TIMESTAMPTZ, nullable)
+reason (string / text)
+TimesheetWeek
+
+Fields:
+id
+user (FK → User)
+campaign (FK → Campaign)
+weekStartDate (date)
+totalWorkMinutes (int)
+totalBreakMinutes (int)
+totalLeaveMinutes (int)
+status (e.g. OPEN, SUBMITTED, APPROVED)
+Indexes
+Add indexes appropriate for time‑series queries, e.g.:
+
+time_events (user_id, timestamp_utc)
+time_events (campaign_id, timestamp_utc)
+Indexes on leave_requests (user_id, start_utc), leave_requests (campaign_id, start_utc), etc.
+Once the domain model compiles and migrations run cleanly, move to Phase 2.
+
+Phase 2 – Auth, roles, admin from .env
+Implement or verify a Role enum and role‑based access control:
+
+Role enum: ADMIN, MANAGER, EMPLOYEE.
+@Roles(...roles: Role[]) decorator.
+RolesGuard that reads user.role from the JWT payload and enforces route metadata.
+Configure JWT:
+
+JwtStrategy using jwt.secret and jwt.expiresIn from config (@nestjs/config).
+Ensure JWT payload includes at least:
+sub (userId)
+role (user role)
+email (optional but useful)
+.env support via @nestjs/config:
+
+.env keys:
+ADMIN_EMAIL
+ADMIN_PASSWORD
+ADMIN_TIMEZONE
+app.bootstrap.ts should create an ADMIN user with these credentials if it does not exist, hashing the password.
+Auth endpoints (documented in Swagger):
+
+POST /auth/login
+Body uses LoginDto.
+Response uses TokenResponseDto and returns accessToken (JWT).
+JWT payload includes sub (userId) and role.
+After auth works end‑to‑end (login + role guarding), proceed to Phase 3.
+
+Phase 3 – Core CRUD APIs (with Swagger)
+Use JwtAuthGuard + RolesGuard on all protected routes.
+Annotate controllers and routes with Swagger decorators: @ApiTags, @ApiOperation, @ApiOkResponse, etc.
+
+3.1 Users
+Endpoints:
+
+GET /users (ADMIN)
+
+List all users with their campaign relationship and unique agent ID.
+GET /users/me
+
+Returns the current authenticated user profile.
+POST /users (ADMIN)
+
+Create user (default role = EMPLOYEE if not specified).
+Assign campaign and time zone.
+Assign a uniqueAgentId/employeeCode (cannot clash with existing users).
+PATCH /users/:id/role (ADMIN only)
+
+Change user role to EMPLOYEE, MANAGER, or ADMIN.
+Explicit rule: only users with Role.ADMIN can change roles, including promoting users to MANAGER or ADMIN. Managers must not be able to promote other users or themselves.
+(Optional) PATCH /users/:id/status (ADMIN, MANAGER)
+
+Change user status (e.g. TRAINING, ACTIVE, SUSPENDED, TERMINATED), but not the role.
+When setting status to a leaver state (e.g. TERMINATED), ensure:
+Attendance history is preserved.
+User appears in a “Leavers” view but time events and leave history remain queryable.
+3.2 Campaigns
+Endpoints:
+
+GET /campaigns (ADMIN, MANAGER)
+
+Admin: see all campaigns.
+Manager (Operations Manager / OM): see only campaigns they oversee (via relationship or assignment list).
+POST /campaigns (ADMIN)
+
+Create campaign with default time zone and schedule fields (shift configuration).
+PATCH /campaigns/:id (ADMIN)
+
+Update schedule and metadata (including shift start/end, lunch, tea breaks).
+POST /campaigns/:id/users (ADMIN, MANAGER)
+
+Assign or remove users to/from a campaign.
+Define a clear DTO for assign/remove operations.
+Moving a user from one campaign to another must not lose their historical attendance; historical data remains linked to the same user.
+3.3 Event types
+Endpoints:
+
+GET /event-types
+
+List all event types.
+POST /event-types (ADMIN)
+
+Create event type with name, category, isPaid, isBreak, active.
+Seed database with standard work/break event types:
+
+Start Work
+End Work
+Start Break
+End Break
+(Optionally lunch vs tea break types)
+These event types power the agent‑driven attendance capture model:
+
+Agents click: Start Work, Start Break, End Break, End Work.
+3.4 Leave types
+Endpoints:
+
+GET /leave-types
+
+List leave types in the desired order, including at least:
+Present, Annual Leave, Sick Leave, Birthday Leave, Family Responsibility Leave, Absent, Terminated / Leaver, Lieu Day, Day Off, Annual Leave Half Day, Sick Leave Half Day, Family Responsibility Leave Half Day, Maternity Leave, Paternity Leave, AWOL, Unpaid Half Day, Suspension, Training, Unpaid Leave, Redeployment.
+POST /leave-types (ADMIN)
+
+PATCH /leave-types/:id (ADMIN)
+
+Manage master data for leave types (name, paid, full/half day allowed, active, ordering).
+
+When CRUD is stable and documented in Swagger, go to Phase 4.
+
+Phase 4 – Time events (clock actions)
+Implement the core agent‑driven attendance capture:
+
+POST /time-events (EMPLOYEE)
+Body:
+{ eventTypeId } (+ optional context fields if needed later).
+Use the authenticated user from JWT and that user’s current campaign.
+Validate sequence where possible:
+Cannot End Work if not currently in a working state.
+Cannot End Break if not on a break.
+Validate against campaign schedule (e.g. allow checks that events fall within expected shift windows).
+Store the event with timestampUtc = now() in UTC.
+GET /me/time-events?date=YYYY-MM-DD (EMPLOYEE)
+Returns a list of that day’s events for the current user.
+Input date is in user/campaign time zone, but all storage and computation is in UTC.
+This API will be the basis for timesheets and reports. Once stable, proceed to Phase 5.
+
+Phase 5 – Leave requests
+Implement leave request lifecycle and approval.
+
+POST /leave-requests (EMPLOYEE)
+Inputs:
+leaveTypeId
+startDate
+endDate
+fullDay / halfDay flags (or an enum to represent duration type)
+reason (optional)
+Creates a LeaveRequest in PENDING state for the employee’s current campaign.
+Convert startDate / endDate into startUtc / endUtc (UTC) using campaign/user time zone.
+GET /leave-requests (MANAGER/ADMIN)
+Filters:
+campaignId?
+userId?
+status?
+Date range (e.g. from, to)
+Access control:
+Managers: only see leave requests for their campaigns.
+Admins: see all.
+PATCH /leave-requests/:id (MANAGER/ADMIN)
+Approve or reject with optional comment.
+Set:
+status
+approvedBy (current user)
+approvedAt (UTC now)
+Document all endpoints in Swagger. After validation and workflows behave correctly, move to Phase 6.
+
+Phase 6 – Timesheets & Excel‑style reports (with hours worked and WFM metrics)
+This phase must mirror the spreadsheets (Attendance Tracker and TOO Weekly) but with hours worked included and must implement the WFM metrics and calculations described below.
+
+6.1 Attendance metrics & definitions
+You must compute, per agent and per period (daily, weekly, MTD, YTD):
+
+Shifts:
+Total scheduled working days or shifts assigned to an agent within the selected period, based on campaign shift configuration and scheduling rules.
+
+Present:
+Days where the agent attended work and completed the required working hours.
+
+Sick Leave:
+Days recorded as medically related absence.
+
+Absence:
+Unapproved or unexplained absence.
+
+FRL (Family Responsibility Leave):
+Leave taken for qualifying family responsibility reasons.
+
+Annual Leave:
+Approved annual leave days taken.
+
+S&A (Sick & Absence):
+Combined view of Sick Leave and Absence:
+S&A = Sick Leave + Absence.
+
+FRL %:
+Percentage of Family Responsibility Leave taken against total shifts.
+
+AL %:
+Percentage of Annual Leave taken against total shifts.
+
+TOO % (Time Off Overall):
+Total time off against total shifts.
+
+6.2 Percentage calculation logic
+All percentage-based metrics use Shifts as the denominator:
+
+FRL % = (FRL Days ÷ Total Shifts) × 100
+AL %  = (Annual Leave Days ÷ Total Shifts) × 100
+TOO % = (All Time Off Days ÷ Total Shifts) × 100
+Where Time Off Days includes at least:
+
+Annual Leave
+Sick Leave
+FRL
+Absence
+Other approved leave types (e.g. Maternity, Paternity, Suspension, Training, Unpaid Leave, Redeployment, etc.)
+The computation service must:
+
+Use TimeEvent + LeaveRequest + LeaveType to:
+Determine the daily attendance status per user (Present, Sick Leave, Annual Leave, etc.).
+Compute workMinutes and breakMinutes per day.
+Use campaign shift configuration to:
+Derive Shifts (e.g. count working days within the date range based on shift rules; in the simplest case, Monday–Friday for scheduled campaigns)
+Validate that “Present” requires sufficient workMinutes compared to expected shift duration.
+6.3 Time views & reporting (Weekly, MTD, YTD & filters)
+Your reporting layer must support views for Operations Managers:
+
+Weekly
+Month-to-Date (MTD)
+Year-to-Date (YTD)
+Filtering options must include:
+
+Operations Manager (OM / Manager user)
+Campaign
+Team (e.g. team leader / teamName)
+Individual Agent (by userId / uniqueAgentId)
+Implement these views using the report endpoints described below, using:
+
+A generalized (from, to) date range; and/or
+A view parameter: view=weekly|mtd|ytd to standardize how ranges are interpreted.
+6.4 Daily/weekly/monthly report APIs
+Implement REST endpoints:
+
+GET /reports/attendance/daily
+
+Query params:
+date (required)
+campaignId?
+operationsManagerId? or managerId?
+teamId? or teamLeaderId?
+userId?
+Response shaped like "Attendance Tracker" Excel:
+Columns: Agent Name, Team Leader, Campaign, then one column for the specified date.
+Each date cell includes:
+Attendance status
+Total hours worked that day (from workMinutes)
+Break minutes if useful.
+GET /reports/attendance/range
+
+Query params:
+from (date)
+to (date)
+view? (weekly, mtd, ytd, custom)
+campaignId?
+operationsManagerId?
+teamId?
+userId?
+Response:
+Matrix: rows = agents, columns = dates.
+Each cell: attendance status, hours worked, break minutes.
+Include per‑agent totals for:
+Shifts
+Present
+Sick
+Absence
+FRL
+Annual Leave
+S&A
+FRL %, AL %, TOO %.
+GET /reports/too-weekly
+
+Query params:
+fromWeek
+toWeek
+campaignId?
+operationsManagerId?
+Returns per‑campaign weekly summary like TOO Weekly:
+Rows:
+Shifts
+Present
+Sick Leave
+Absence
+FRL
+Annual Leave
+S&A
+FRL %
+AL %
+TOO %
+Columns: week end dates (e.g., 05-Jan-26, 12-Jan-26, 19-Jan-26, …).
+Include total hours worked per week and per campaign.
+Ensure response JSON is easy for a frontend to render into tables that resemble the Excel structure (similar row/column ordering).
+
+6.5 Payroll, HR & BCEA considerations
+While full Payroll/HR logic is not in scope, ensure that the data and calculations support:
+
+Days worked per period.
+Basic pro‑rata calculations (e.g. partial periods) based on Shifts and Present.
+Alignment with South African BCEA requirements (e.g. accurate days and time off tracking).
+You do not need to implement full payroll; just ensure the attendance and time data is reliable and structured to support it.
+
+6.6 Live streaming / real‑time updates
+Implement either:
+
+Server‑Sent Events (SSE) using @Sse() endpoints, or
+WebSockets using @WebSocketGateway.
+Requirements:
+
+Push new TimeEvents (clock in/out, breaks) in near real‑time.
+Push summary updates such as:
+Number of employees currently working per campaign.
+Number on break, off, etc.
+Provide channels per campaign so managers/admins can subscribe only to their campaigns.
+After live updates and reporting work, move to Phase 7.
+
+Phase 7 – CSV export of reports
+For each report endpoint from Phase 6, add a CSV export variant:
+
+GET /reports/attendance/daily/export
+GET /reports/attendance/range/export
+GET /reports/too-weekly/export
+Implementation details:
+
+Reuse the same report service logic that builds the in‑memory matrices.
+
+Generate a CSV string:
+
+For Attendance Tracker–like reports:
+
+Columns should match spreadsheet order.
+Include hours worked (e.g. separate columns for Status and Hours Worked).
+Include Shifts, Present, Sick, Absence, FRL, Annual Leave, S&A, FRL %, AL %, TOO % totals where appropriate.
+For TOO Weekly:
+
+One block per campaign.
+Attendance row labels and week columns as in the Excel (row titles + week‑ending dates).
+Include total hours worked per week and per campaign.
+Set headers to trigger download:
+
+Content-Type: text/csv
+Content-Disposition: attachment; filename="<meaningful-name>.csv"
+Document these endpoints in Swagger:
+
+Use @ApiOperation and describe that they return CSV, not JSON.
+When CSV exports open correctly in Excel/Sheets with aligned columns, move to Phase 8.
+
+Phase 8 – Frontend UI (grey/blue/white, no emojis, no purple)
+Create a frontend app (e.g. frontend/ using React + TypeScript + Vite).
+
+Global design rules
+Colors:
+Background: white (#ffffff)
+Surfaces: light greys (#f3f4f6, #e5e7eb)
+Primary accent: blue (e.g. #2563eb)
+Text: dark grey (#111827, #4b5563)
+No purple anywhere.
+No emojis; use simple icons or plain text.
+Clean, minimal dashboard layout with:
+Top navigation bar
+Left sidebar navigation
+Central content area for tables/cards
+Role‑based screens & behavior
+Employee (Agent) UI
+Dashboard:
+
+Big buttons for:
+Start Work
+Start Break
+End Break
+End Work
+Today summary:
+Current status (e.g. Working, On Break, Off).
+Total hours worked today.
+Break minutes taken.
+Simple timeline of today’s events (time‑stamped Start/End Work/Break).
+Timesheet view:
+
+Weekly view of days with:
+Status (Present, Leave type, Absent, etc.).
+Hours worked per day.
+Break minutes.
+Daily detail modal showing raw events and linked leave if any.
+Leave:
+
+Leave request form (select leave type, date range, reason).
+List of own leave requests with status (Pending, Approved, Rejected, Canceled).
+Manager / OM UI
+Managers represent Operations Managers (OMs) for the WFM context.
+
+Manager Dashboard:
+
+Live stats per campaign:
+Employees currently working.
+Employees on break.
+Employees off.
+Small table/tile showing current day’s attendance snapshot.
+Attendance Tracker view (core WFM view):
+
+Table that visually resembles the Attendance Tracker spreadsheet:
+Columns: Agent Name, Team Leader, Campaign, followed by date columns.
+Each cell shows:
+Status for that date.
+Hours worked.
+At the right or bottom, show per‑agent totals for:
+Shifts
+Present
+Sick
+Absence
+FRL
+Annual Leave
+S&A
+FRL %
+AL %
+TOO %
+Reporting views:
+
+Controls for selecting:
+View: Weekly, MTD, YTD, or custom date range.
+Filters: OM (self), Campaign, Team, Agent.
+Display data from:
+/reports/attendance/daily
+/reports/attendance/range
+/reports/too-weekly
+Provide “Download CSV” buttons that call the /export variants.
+Leave approval screen:
+
+List of leave requests for manager’s campaigns.
+Approve/reject actions with comments.
+Live updates:
+
+Optional WebSocket/SSE subscription per campaign to see near real‑time changes in attendance.
+Admin UI
+Admins are the only users allowed to change roles/promote users.
+
+User management:
+
+Table of all users with:
+uniqueAgentId, name, email, campaign, role, status.
+Actions:
+Create user (assign campaign, status, time zone, uniqueAgentId).
+Change status (e.g. Training, Active, Suspended, Terminated).
+Change role via a dedicated UI (only visible to Admin).
+Must enforce that only Admin can promote a user to MANAGER or ADMIN or demote back to EMPLOYEE.
+Campaign management:
+
+Create/update campaigns; configure shift times (start/end, lunch, tea breaks).
+Assign managers/OMs to campaigns.
+Master data:
+
+CRUD UI for EventType and LeaveType (with order).
+Ability to mark leave types as paid/unpaid and full/half‑day rules.
+Global reporting:
+
+Access to all campaigns and all OMs.
+Same Attendance and TOO Weekly views as managers, but unrestricted.
+CSV export UI to trigger /export endpoints.
+Data migration & rehiring support:
+
+Optionally an admin tool to:
+Import legacy attendance data.
+Map records to uniqueAgentId for rehires.
+Integration
+Implement login flow with JWT:
+Store JWT securely (e.g. in memory or HTTP‑only cookie).
+Include Authorization: Bearer <token> on API calls.
+Call backend APIs for:
+Auth
+Users, campaigns, event types, leave types
+Time events, leave requests
+Reports + CSV export
+Live updates (SSE/WebSockets) for dashboards.
+After the frontend runs and basic flows work end‑to‑end, move to Phase 9.
+
+Phase 9 – Developer UX and validation
+Ensure:
+
+Backend:
+
+npm run start:dev runs the NestJS backend.
+http://localhost:3000/api/docs shows all endpoints grouped by tags with meaningful request/response schemas.
+All critical routes are protected with JWT + RolesGuard.
+UTC handling is consistent for all time fields.
+WFM calculations (Shifts, Present, Sick, Absence, FRL, Annual Leave, S&A, FRL %, AL %, TOO %) are correct and tested at least with a few sample scenarios.
+Frontend:
+
+A dev script exists, e.g. npm run dev:frontend (or similar).
+Frontend can log in as Employee, Manager, Admin and shows appropriate dashboards and permissions.
+Only Admin sees role‑change UI; Managers cannot promote users.
+CSV export buttons call the /export endpoints and trigger downloads.
+UI constraints:
+
+Colors: grey/blue/white only for primary accents.
+No purple anywhere.
+No emojis.
+CSV exports:
+
+Open correctly in Excel/Google Sheets.
+Column order and labels match the existing spreadsheet templates as closely as possible.
+Hours worked, Shifts, Present, Sick, Absence, FRL, Annual Leave, S&A, FRL %, AL %, TOO % are clearly represented.
