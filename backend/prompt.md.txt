@@ -1,0 +1,552 @@
+Here’s a cleaned, copy‑paste‑ready version of your Cursor prompt with the same structure and intent, just slightly tightened and made explicit about phase‑by‑phase execution and not skipping details.
+
+---
+
+**Prompt for Cursor (paste everything below into Cursor):**
+
+You are working on a NestJS + TypeScript + PostgreSQL project called `time-tracker-api`.  
+Your job is to **finish the backend and generate a simple frontend** for an internal employee attendance & time‑tracking system.
+
+Before making any changes, you must:
+
+1. **Scan the whole codebase** (`src/**`, any frontend/app folders, config, etc.) so you understand what already exists (entities, modules, services, controllers, Swagger setup).
+2. Maintain a **phased to‑do list** and complete each phase carefully before moving to the next.  
+   - Do **not** skip steps or silently merge multiple phases.  
+   - At each phase, prefer extending/refactoring over deleting working code.  
+   - Ensure the project compiles and existing tests pass before moving on.
+
+Do **not** remove working code unless absolutely necessary; prefer to extend and refactor.
+
+---
+
+## Phase 0 – Understand the current state
+
+1. Inspect these files and folders in detail:
+   - `src/main.ts`, `src/app.module.ts`, `src/app.bootstrap.ts`
+   - `src/config/**`
+   - `src/common/**`
+   - `src/modules/auth/**`
+   - `src/modules/users/**`
+   - `src/modules/campaigns/**`
+   - `src/modules/event-types/**`
+   - `src/modules/time-events/**`
+   - `src/modules/leave/**`
+   - `src/modules/timesheets/**`
+   - `src/modules/reports/**`
+
+2. Summarise **internally (do not print)** what is:
+   - Already working (e.g. login, admin bootstrap, existing CRUD).  
+   - Partially implemented.  
+   - Missing (gaps in entities, endpoints, or services).
+
+Only after you understand the existing architecture and code, proceed to Phase 1.
+
+---
+
+## Phase 1 – Domain model completeness
+
+Ensure the following entities exist and are correctly mapped with TypeORM. Reuse or adjust existing entities where possible.
+
+All timestamps must be stored as UTC (`TIMESTAMPTZ`).  
+Ensure `User` and `Campaign` both have a `timeZone` (IANA string).
+
+### Entities
+
+- **User**
+  - Fields:  
+    - `id`  
+    - `email`  
+    - `passwordHash`  
+    - `fullName`  
+    - `designation`  
+    - `role` (enum: `ADMIN`, `MANAGER`, `EMPLOYEE`)  
+    - `status`  
+    - `timeZone` (IANA string)  
+    - `campaign` (FK → `Campaign`)
+
+- **Campaign**
+  - Fields:  
+    - `id`  
+    - `name`  
+    - `description`  
+    - `defaultTimeZone` (IANA string)  
+    - Schedule fields:  
+      - `workDayStart`  
+      - `workDayEnd`  
+      - `lunchStart`  
+      - `lunchEnd`  
+      - `teaBreaks` as `JSONB` (or use a separate table if it already exists / is cleaner).
+
+- **EventType**
+  - Fields:  
+    - `id`  
+    - `name` (unique)  
+    - `category` (enum: `WORK`, `BREAK`, `LEAVE`, `OTHER`)  
+    - `isPaid` (boolean)  
+    - `isBreak` (boolean)  
+    - `active` (boolean)
+
+- **TimeEvent**
+  - Fields:  
+    - `id`  
+    - `user` (FK → `User`)  
+    - `campaign` (FK → `Campaign`)  
+    - `eventType` (FK → `EventType`)  
+    - `timestampUtc` (`TIMESTAMPTZ`, stored in UTC)  
+    - `source` (enum: `WEB`, `MOBILE`, `DESKTOP`)
+
+- **LeaveType**
+  - Fields:  
+    - `id`  
+    - `name` (unique, ordered list from Excel leave column)  
+    - `paid` (boolean)  
+    - `fullDayAllowed` (boolean)  
+    - `halfDayAllowed` (boolean)  
+    - `active` (boolean)
+
+- **LeaveRequest**
+  - Fields:  
+    - `id`  
+    - `user` (FK → `User`)  
+    - `campaign` (FK → `Campaign`)  
+    - `leaveType` (FK → `LeaveType`)  
+    - `startUtc` (`TIMESTAMPTZ`)  
+    - `endUtc` (`TIMESTAMPTZ`)  
+    - `status` (enum: `PENDING`, `APPROVED`, `REJECTED`, `CANCELED`)  
+    - `approvedBy` (FK → `User` or nullable)  
+    - `approvedAt` (`TIMESTAMPTZ`, nullable)  
+    - `reason` (string / text)
+
+- **TimesheetWeek**
+  - Fields:  
+    - `id`  
+    - `user` (FK → `User`)  
+    - `campaign` (FK → `Campaign`)  
+    - `weekStartDate` (date)  
+    - `totalWorkMinutes` (int)  
+    - `totalBreakMinutes` (int)  
+    - `totalLeaveMinutes` (int)  
+    - `status` (e.g. `OPEN`, `SUBMITTED`, `APPROVED` if applicable, otherwise at least a status string/enum)
+
+### Indexes
+
+Add indexes appropriate for time‑series queries, e.g.:
+
+- `CREATE INDEX` on `time_events (user_id, timestamp_utc)`.  
+- Other useful indexes on `campaign_id`, date fields, and FK fields as needed.
+
+Once the domain model compiles and migrations run cleanly, move to Phase 2.
+
+---
+
+## Phase 2 – Auth, roles, admin from .env
+
+1. Implement or verify a `Role` enum and role‑based access control:
+   - `Role` enum: `ADMIN`, `MANAGER`, `EMPLOYEE`.  
+   - `@Roles(...roles: Role[])` decorator.  
+   - `RolesGuard` that reads `user.role` from the JWT payload and enforces route metadata.
+
+2. Configure JWT:
+   - `JwtStrategy` using `jwt.secret` and `jwt.expiresIn` from config (`@nestjs/config`).  
+   - Ensure JWT payload includes at least:  
+     - `sub` (userId)  
+     - `role` (user role)
+
+3. `.env` support via `@nestjs/config`:
+   - `.env` keys:  
+     - `ADMIN_EMAIL`  
+     - `ADMIN_PASSWORD`  
+     - `ADMIN_TIMEZONE`
+   - `app.bootstrap.ts` should create an ADMIN user with these credentials if it does not exist.
+
+4. Auth endpoints (documented in Swagger):
+   - `POST /auth/login`  
+     - Body uses `LoginDto`.  
+     - Response uses `TokenResponseDto` and returns `accessToken` (JWT).  
+     - JWT payload includes `sub` (userId) and `role`.
+
+After auth works end‑to‑end (login + role guarding), proceed to Phase 3.
+
+---
+
+## Phase 3 – Core CRUD APIs (with Swagger)
+
+Use `JwtAuthGuard` + `RolesGuard` on all protected routes.  
+Annotate controllers and routes with Swagger decorators: `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`, etc.
+
+### 3.1 Users
+
+Endpoints:
+
+- `GET /users` (ADMIN)
+  - List all users with their campaign relationship.
+
+- `GET /users/me`
+  - Returns the current authenticated user profile.
+
+- `POST /users` (ADMIN)
+  - Create user (default role = `EMPLOYEE` if not specified).  
+  - Assign campaign and time zone.
+
+- `PATCH /users/:id/role` (ADMIN)
+  - Change user role to `EMPLOYEE`, `MANAGER`, or `ADMIN`.
+
+### 3.2 Campaigns
+
+Endpoints:
+
+- `GET /campaigns` (ADMIN, MANAGER)
+  - Admin: see all campaigns.  
+  - Manager: see only campaigns they are assigned to (use existing or new relation).
+
+- `POST /campaigns` (ADMIN)
+  - Create campaign with default time zone and schedule fields.
+
+- `PATCH /campaigns/:id` (ADMIN)
+  - Update schedule and metadata.
+
+- `POST /campaigns/:id/users` (ADMIN, MANAGER)
+  - Assign or remove users to/from a campaign.  
+  - Define a clear DTO for assign/remove operations.
+
+### 3.3 Event types
+
+Endpoints:
+
+- `GET /event-types`
+  - List all event types.
+
+- `POST /event-types` (ADMIN)
+  - Create event type with `name`, `category`, `isPaid`, `isBreak`, `active`.
+
+Seed database with standard work/break event types (e.g. Work Start, Work End, Lunch Start, Lunch End, Tea Break Start/End, etc.).
+
+### 3.4 Leave types
+
+Endpoints:
+
+- `GET /leave-types`
+  - List leave types **in this exact order**:
+    1. Present  
+    2. Annual Leave  
+    3. Sick Leave  
+    4. Birthday leave  
+    5. Family Responsibility Leave  
+    6. Absent  
+    7. Terminated / Leaver  
+    8. Lieu Day  
+    9. Day Off  
+    10. Annual Leave Halfday  
+    11. Sick Leave Halfday  
+    12. Family Responsibility Leave Halfday  
+    13. Maternity Leave  
+    14. Paternity Leave  
+    15. AWOL  
+    16. Unpaid Half Day  
+    17. Training  
+    18. Unpaid Leave  
+    19. Redeployment
+
+- `POST /leave-types` (ADMIN)
+- `PATCH /leave-types/:id` (ADMIN)
+
+Manage master data for leave types (name, paid, full/half day allowed, active, ordering).
+
+When CRUD is stable and documented in Swagger, go to Phase 4.
+
+---
+
+## Phase 4 – Time events (clock actions)
+
+Implement the core clock in/out and break logic.
+
+### `POST /time-events` (EMPLOYEE)
+
+- Body:  
+  - `{ eventTypeId }` (+ optional context fields if needed later).  
+- Use the authenticated user from JWT and that user’s current `campaign`.  
+- Validate against campaign schedule and current state if possible (e.g. avoid ending work if not started, basic sequence checks).  
+- Store the event with `timestampUtc = now()` in UTC.
+
+### `GET /me/time-events?date=YYYY-MM-DD` (EMPLOYEE)
+
+- Returns a list of that day’s events for the current user.  
+- Allow specifying date in the user’s/campaign’s time zone, but store and query internally in UTC.
+
+This API will be the basis for timesheets and reports. Once stable, proceed to Phase 5.
+
+---
+
+## Phase 5 – Leave requests
+
+Implement leave request lifecycle and approval.
+
+### `POST /leave-requests` (EMPLOYEE)
+
+- Inputs:  
+  - `leaveTypeId`  
+  - `startDate`  
+  - `endDate`  
+  - `fullDay` / `halfDay` flags (or an enum to represent duration type)  
+  - `reason` (optional but recommended)
+- Creates a `LeaveRequest` in `PENDING` state for the employee’s current campaign.  
+- Convert `startDate` / `endDate` into `startUtc` / `endUtc` (UTC) using campaign/user time zone.
+
+### `GET /leave-requests` (MANAGER/ADMIN)
+
+- Filters:
+  - `campaignId?`  
+  - `userId?`  
+  - `status?`  
+  - Date range (e.g. `from`, `to`)
+- Access control:
+  - Managers: only see leave requests for their campaigns.  
+  - Admins: see all.
+
+### `PATCH /leave-requests/:id` (MANAGER/ADMIN)
+
+- Approve or reject with optional comment.  
+- Set:
+  - `status`  
+  - `approvedBy` (current user)  
+  - `approvedAt` (UTC now)
+
+Document all endpoints in Swagger. After validation and workflows behave correctly, move to Phase 6.
+
+---
+
+## Phase 6 – Timesheets & Excel‑style reports (with hours worked)
+
+This phase must **mirror the spreadsheets** (Attendance Tracker and TOO Weekly) but with **hours worked included**.
+
+### 6.1 Computation
+
+Implement a service that uses `TimeEvent` + `LeaveRequest` to compute:
+
+- For each user and date:
+  - Daily attendance status (Present, Sick Leave, Annual Leave, etc.).  
+  - `workMinutes` and `breakMinutes` for that day.
+
+The service should, for a given `(campaignId, date range)`:
+
+- Build a matrix:
+  - Rows = users  
+  - Columns = dates  
+  - Cell = `{ attendanceStatus, workMinutes, breakMinutes }`
+- Aggregate totals:
+  - Per campaign and date range:
+    - Shifts  
+    - Present count  
+    - Sick count  
+    - Leave count  
+    - Percentages (e.g. FRL %, AL %, TOO %) where relevant.
+
+### 6.2 Daily/weekly/monthly report APIs
+
+Implement REST endpoints:
+
+1. `GET /reports/attendance/daily`
+   - Query params:  
+     - `date` (required)  
+     - `campaignId?`  
+     - `teamLeaderId?`  
+     - `userId?`
+   - Response shape similar to "Attendance Tracker" Excel:
+     - Columns: `Agent Name`, `Team Leader`, `Campaign`, then one column for the specified `date`.  
+     - Each date cell: attendance status + total hours worked (you can represent hours as decimal or HH:MM).
+
+2. `GET /reports/attendance/range`
+   - Query params:
+     - `from` (date)  
+     - `to` (date)  
+     - `campaignId?`  
+     - `teamLeaderId?`  
+     - `userId?`
+   - Response:
+     - Same matrix, but multiple date columns (for daily/weekly/monthly depending on `from`/`to`).  
+     - Each cell: attendance status + hours worked, plus break minutes as needed.
+
+3. `GET /reports/too-weekly`
+   - Query params:
+     - `fromWeek`  
+     - `toWeek`  
+     - `campaignId?`
+   - Returns per‑campaign weekly summary like TOO Weekly:
+     - Rows:  
+       - Shifts  
+       - Present  
+       - Sick leave  
+       - Absence  
+       - Family Responsibility Leave (FRL)  
+       - Annual Leave (AL)  
+       - S&A  
+       - FRL %  
+       - AL %  
+       - TOO %  
+     - Columns: week end dates (e.g., `05-Jan-26`, `12-Jan-26`, `19-Jan-26`, …).
+     - Include total hours worked per week and per campaign.
+
+Ensure response JSON is easy for a frontend to render into tables that resemble the Excel structure (similar row/column ordering).
+
+### 6.3 Live streaming / real‑time updates
+
+Implement either:
+
+- **Server‑Sent Events (SSE)** using `@Sse()` endpoints, or  
+- **WebSockets** using `@WebSocketGateway`.
+
+Requirements:
+
+- Push new `TimeEvent`s (clock in/out, breaks) in near real‑time.  
+- Push summary updates such as:
+  - Number of employees currently working per campaign.  
+  - Number on break, off, etc.
+- Provide **channels per campaign**, so managers/admins can subscribe only to their campaign(s).
+
+After live updates and reporting work, move to Phase 7.
+
+---
+
+## Phase 7 – CSV export of reports
+
+For each report endpoint from Phase 6, add a CSV export variant:
+
+- `GET /reports/attendance/daily/export`  
+- `GET /reports/attendance/range/export`  
+- `GET /reports/too-weekly/export`
+
+Implementation details:
+
+- Reuse the same report service logic that builds the in‑memory matrices.  
+- Generate a CSV string:
+
+  - For Attendance Tracker–like reports:
+    - Columns should **match spreadsheet order**.  
+    - Include hours worked (e.g. separate columns for `Status` and `Hours Worked`, or a combined representation if clearly documented).
+
+  - For TOO Weekly:
+    - One block per campaign.  
+    - Attendance row labels and week columns as in the Excel (row titles + week‑ending dates).  
+    - Include total hours worked per week where appropriate.
+
+- Set headers to trigger download:
+  - `Content-Type: text/csv`  
+  - `Content-Disposition: attachment; filename="<meaningful-name>.csv"`
+
+- Document these endpoints in Swagger:
+  - Use `@ApiOperation` and describe that they return CSV, not JSON.
+
+When CSV exports open correctly in Excel/Sheets with aligned columns, move to Phase 8.
+
+---
+
+## Phase 8 – Frontend UI (grey/blue/white, no emojis, no purple)
+
+Create a frontend app (e.g. `frontend/` using **React + TypeScript + Vite**).
+
+### Global design rules
+
+- Colors:
+  - Background: white (`#ffffff`)  
+  - Surfaces: light greys (`#f3f4f6`, `#e5e7eb`)  
+  - Primary accent: blue (e.g. `#2563eb`)  
+  - Text: dark grey (`#111827`, `#4b5563`)
+- **No purple** anywhere.  
+- **No emojis**; use simple icons or plain text.
+- Clean, minimal dashboard layout with:
+  - Top navigation bar  
+  - Left sidebar navigation  
+  - Central content area for tables/cards
+
+### Screens per role
+
+**Employee**
+
+- Dashboard:
+  - Big Start Work / End Work button.  
+  - Buttons for lunch and tea breaks.  
+  - Today summary (status, total hours worked, breaks).  
+  - Simple timeline of today’s events.
+- Timesheet view:
+  - Weekly overview with hours worked per day.  
+  - Daily detail modal showing events and leave (if any).
+- Leave:
+  - Leave request form.  
+  - List of own leave requests with status.
+
+**Manager**
+
+- Dashboard:
+  - Current campaign stats (count of employees working, on break, off).  
+  - Optionally show simple cards and a small live table.
+- Attendance Tracker view:
+  - Table that visually resembles the spreadsheet:
+    - Columns: `Agent Name`, `Team Leader`, `Campaign`, plus date columns.  
+    - Cells show status and hours worked.
+- Leave approval screen:
+  - List of pending/approved/rejected leave requests for manager’s campaigns.  
+  - Ability to approve/reject with comments.
+- Reports viewer:
+  - UI for daily/weekly/monthly attendance and TOO Weekly summary.  
+  - Filters for campaign, date range, etc.  
+  - Buttons to download CSV (call export endpoints).
+
+**Admin**
+
+- User management:
+  - Create users, assign campaigns, change roles.  
+  - Simple table + modal or drawer for user details.
+- Campaign management:
+  - Create/update campaigns, configure schedule and time zone.  
+  - Assign managers.
+- Master data:
+  - Manage `EventType`s and `LeaveType`s.
+- Global reporting:
+  - Access all campaigns.  
+  - CSV export UI for all report types.
+
+### Integration
+
+- Implement login flow with JWT:
+  - Store JWT securely (in memory or HTTP‑only cookie if configured; avoid localStorage if possible).  
+  - Include `Authorization: Bearer <token>` on API calls.
+
+- Call backend APIs for:
+  - Auth  
+  - Users, campaigns, event types, leave types  
+  - Time events, leave requests  
+  - Reports + CSV export
+
+- (Optional but preferred) Use SSE/WebSockets for:
+  - Subscribing to campaign‑specific live updates on dashboards.
+
+After the frontend runs and basic flows work end‑to‑end, move to Phase 9.
+
+---
+
+## Phase 9 – Developer UX and validation
+
+Ensure:
+
+- Backend:
+  - `npm run start:dev` runs the NestJS backend.  
+  - `http://localhost:3000/api/docs` shows all endpoints grouped by tags with meaningful request/response schemas.  
+  - All critical routes are protected with JWT + `RolesGuard`.  
+  - UTC handling is consistent for all time fields.
+
+- Frontend:
+  - A dev script exists, e.g. `npm run dev:frontend` (or similar).  
+  - Frontend can log in, call backend APIs, and render dashboards/reports.  
+  - CSV export buttons call the `/export` endpoints and trigger file downloads.
+
+- UI constraints:
+  - Colors: grey/blue/white only for primary accents.  
+  - **No purple** anywhere.  
+  - **No emojis**.
+
+- CSV exports:
+  - Open correctly in Excel/Google Sheets.  
+  - Column order and labels match the existing spreadsheet templates as closely as possible.  
+  - Hours worked are clearly represented.
+
+Work strictly in **phases**: finish a phase, ensure build/tests pass, then move on. Do not skip steps or merge phases silently.
