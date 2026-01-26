@@ -18,6 +18,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
+      envFilePath: '.env',
     }),
     TypeOrmModule.forRootAsync({
       useFactory: getTypeOrmConfig,
