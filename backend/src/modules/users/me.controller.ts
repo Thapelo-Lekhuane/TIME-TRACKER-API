@@ -21,8 +21,8 @@ export class MeController {
   constructor(private readonly timeEventsService: TimeEventsService) {}
 
   @Get('time-events')
-  @Roles(Role.EMPLOYEE)
-  @ApiOperation({ summary: 'Get my time events for a date' })
+  @Roles(Role.EMPLOYEE, Role.MANAGER, Role.ADMIN)
+  @ApiOperation({ summary: 'Get my time events for a date (any authenticated user)' })
   @ApiOkResponse({ type: [TimeEventResponseDto] })
   async getMyTimeEvents(@Query('date') date: string, @Req() req: any) {
     return this.timeEventsService.findByUserAndDate(req.user.userId, date);

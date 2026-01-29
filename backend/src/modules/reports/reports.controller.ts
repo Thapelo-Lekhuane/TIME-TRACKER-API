@@ -24,10 +24,16 @@ export class ReportsController {
 
   @Get('attendance/daily')
   @Roles(Role.MANAGER, Role.ADMIN)
-  @ApiOperation({ summary: 'Daily attendance report' })
+  @ApiOperation({ summary: 'Daily attendance report (supports single date or date range)' })
   @ApiOkResponse({ type: AttendanceDailyResponseDto })
-  async getAttendanceDaily(@Query() query: { date: string; campaignId?: string }, @Req() req: any) {
-    return this.reportsService.getAttendanceDaily(query.date, query.campaignId, req.user);
+  async getAttendanceDaily(@Query() query: { date?: string; from?: string; to?: string; campaignId?: string }, @Req() req: any) {
+    // If from and to are provided, use range endpoint
+    if (query.from && query.to) {
+      return this.reportsService.getAttendanceRange(query.from, query.to, query.campaignId, req.user);
+    }
+    // Otherwise use single date (default to today if not provided)
+    const date = query.date || new Date().toISOString().split('T')[0];
+    return this.reportsService.getAttendanceDaily(date, query.campaignId, req.user);
   }
 
   @Get('attendance/range')

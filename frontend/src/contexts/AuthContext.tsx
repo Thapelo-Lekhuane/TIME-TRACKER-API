@@ -6,11 +6,14 @@ interface User {
   email: string;
   fullName: string;
   role: 'ADMIN' | 'MANAGER' | 'EMPLOYEE';
+  designation?: string;
+  campaign?: { id: string; name: string } | null;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
+  loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, fullName: string, designation?: string) => Promise<void>;
   logout: () => void;
@@ -22,37 +25,56 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [loading, setLoading] = useState<boolean>(!!localStorage.getItem('token'));
 
   useEffect(() => {
-    if (token) {
+    if (token && !user) {
       fetchUser();
     }
   }, [token]);
 
   const fetchUser = async () => {
+    setLoading(true);
     try {
       const response = await api.get('/users/me');
       setUser(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch user', error);
-      logout();
+      // Only logout if it's an auth error, not a network error
+      if (error.response?.status === 401) {
+        logout();
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
   const login = async (email: string, password: string) => {
-    const response = await api.post('/auth/login', { email, password });
-    const { accessToken } = response.data;
-    setToken(accessToken);
-    localStorage.setItem('token', accessToken);
-    await fetchUser();
+    setLoading(true);
+    try {
+      const response = await api.post('/auth/login', { email, password });
+      const { accessToken } = response.data;
+      localStorage.setItem('token', accessToken);
+      setToken(accessToken);
+      // Fetch user profile after setting token
+      const userResponse = await api.get('/users/me');
+      setUser(userResponse.data);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const signup = async (email: string, password: string, fullName: string, designation?: string) => {
-    const response = await api.post('/auth/signup', { email, password, fullName, designation });
-    const { accessToken, user: newUser } = response.data;
-    setToken(accessToken);
-    localStorage.setItem('token', accessToken);
-    setUser(newUser);
+    setLoading(true);
+    try {
+      const response = await api.post('/auth/signup', { email, password, fullName, designation });
+      const { accessToken, user: newUser } = response.data;
+      localStorage.setItem('token', accessToken);
+      setToken(accessToken);
+      setUser(newUser);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const logout = () => {
@@ -61,8 +83,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('token');
   };
 
+  // isAuthenticated is true only when we have both token AND user loaded
+  const isAuthenticated = !!token && !!user;
+
   return (
-    <AuthContext.Provider value={{ user, token, login, signup, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, isAuthenticated }}>
       {children}
     </AuthContext.Provider>
   );

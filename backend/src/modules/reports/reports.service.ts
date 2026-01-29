@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Campaign } from '../campaigns/campaign.entity';
 import { TimeEvent } from '../time-events/time-event.entity';
@@ -22,41 +22,83 @@ export class ReportsService {
   ) {}
 
   async getAttendanceDaily(date: string, campaignId: string | undefined, user: any) {
-    const campaign = await this.getCampaign(campaignId, user);
-    const users = await this.userRepo.find({ 
-      where: { campaign: { id: campaign.id } },
-      relations: ['campaign'],
-    });
+    // Validate date format
+    if (!date || isNaN(Date.parse(date))) {
+      throw new Error(`Invalid date format: ${date}`);
+    }
+    
+    // Validate and create date objects
     const dateStart = new Date(date + 'T00:00:00Z');
     const dateEnd = new Date(date + 'T23:59:59Z');
     
-    const timeEvents = await this.timeEventRepo.find({
-      where: { 
-        campaign: { id: campaign.id }, 
-        timestampUtc: Between(dateStart, dateEnd),
-      },
-      relations: ['user', 'eventType'],
-    });
+    if (isNaN(dateStart.getTime()) || isNaN(dateEnd.getTime())) {
+      throw new Error(`Invalid date: ${date}`);
+    }
+
+    // Handle "All Campaigns" - when campaignId is empty/undefined
+    let campaigns: Campaign[] = [];
+    if (!campaignId) {
+      // For ADMIN and MANAGER, get all campaigns
+      campaigns = await this.campaignRepo.find();
+    } else {
+      const campaign = await this.getCampaign(campaignId, user);
+      if (campaign) {
+        campaigns = [campaign];
+      }
+    }
     
+    if (campaigns.length === 0) {
+      return {
+        columns: ['Agent Name', 'Team Leader', 'Campaign', date],
+        rows: [],
+      };
+    }
+    
+    // Get all users from all selected campaigns
+    const campaignIds = campaigns.map(c => c.id);
+    const users = await this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.campaign', 'campaign')
+      .leftJoinAndSelect('user.teamLeader', 'teamLeader')
+      .where('user.campaignId IN (:...campaignIds)', { campaignIds })
+      .getMany();
+    
+    // Get time events for all campaigns
+    const timeEvents = await this.timeEventRepo
+      .createQueryBuilder('te')
+      .leftJoinAndSelect('te.user', 'user')
+      .leftJoinAndSelect('te.eventType', 'eventType')
+      .leftJoinAndSelect('te.campaign', 'campaign')
+      .where('te.campaignId IN (:...campaignIds)', { campaignIds })
+      .andWhere('te.timestampUtc BETWEEN :dateStart AND :dateEnd', { dateStart, dateEnd })
+      .getMany();
+    
+    // Get leave requests for all campaigns
     const leaveRequests = await this.leaveRequestRepo
       .createQueryBuilder('lr')
       .leftJoinAndSelect('lr.user', 'user')
       .leftJoinAndSelect('lr.leaveType', 'leaveType')
-      .where('lr.campaign = :campaignId', { campaignId: campaign.id })
+      .leftJoinAndSelect('lr.campaign', 'campaign')
+      .where('lr.campaignId IN (:...campaignIds)', { campaignIds })
       .andWhere('lr.status = :status', { status: LeaveStatus.APPROVED })
       .andWhere('lr.startUtc <= :dateEnd', { dateEnd })
       .andWhere('lr.endUtc >= :dateStart', { dateStart })
       .getMany();
 
     const rows = users.map(u => {
-      const status = this.getStatusForDate(u, date, timeEvents, leaveRequests);
-      const { workMinutes, breakMinutes } = this.calculateMinutesForDate(u, date, timeEvents);
+      // Filter time events for this user
+      const userTimeEvents = timeEvents.filter(te => te.user.id === u.id);
+      // Filter leave requests for this user
+      const userLeaveRequests = leaveRequests.filter(lr => lr.user.id === u.id);
+      
+      const status = this.getStatusForDate(u, date, userTimeEvents, userLeaveRequests);
+      const { workMinutes, breakMinutes } = this.calculateMinutesForDate(u, date, userTimeEvents);
       const workHours = (workMinutes / 60).toFixed(2);
       
       return {
         agentName: u.fullName,
-        teamLeader: u.designation || '', // Assuming designation could be team leader, adjust as needed
-        campaign: campaign.name,
+        teamLeader: u.teamLeader?.fullName || '',
+        campaign: u.campaign?.name || '',
         [date]: {
           status,
           workHours: parseFloat(workHours),
@@ -73,43 +115,93 @@ export class ReportsService {
   }
 
   async getAttendanceRange(from: string, to: string, campaignId: string | undefined, user: any) {
-    const campaign = await this.getCampaign(campaignId, user);
-    const users = await this.userRepo.find({ 
-      where: { campaign: { id: campaign.id } },
-      relations: ['campaign'],
-    });
+    // Validate date formats first
+    if (!from || !to) {
+      throw new Error('Both from and to dates are required');
+    }
+    
+    // Validate dates are valid
+    const fromDateTest = new Date(from);
+    const toDateTest = new Date(to);
+    if (isNaN(fromDateTest.getTime()) || isNaN(toDateTest.getTime())) {
+      throw new Error(`Invalid date format: from=${from}, to=${to}`);
+    }
+    
+    // Create validated date objects
     const dateStart = new Date(from + 'T00:00:00Z');
     const dateEnd = new Date(to + 'T23:59:59Z');
     
-    const timeEvents = await this.timeEventRepo.find({
-      where: { 
-        campaign: { id: campaign.id }, 
-        timestampUtc: Between(dateStart, dateEnd),
-      },
-      relations: ['user', 'eventType'],
-    });
+    // Double-check dates are valid
+    if (isNaN(dateStart.getTime()) || isNaN(dateEnd.getTime())) {
+      throw new Error(`Invalid date range: from=${from}, to=${to}`);
+    }
+
+    const dates = this.getDatesInRange(from, to);
+
+    // Handle "All Campaigns" - when campaignId is empty/undefined
+    let campaigns: Campaign[] = [];
+    if (!campaignId) {
+      // For ADMIN and MANAGER, get all campaigns
+      campaigns = await this.campaignRepo.find();
+    } else {
+      const campaign = await this.getCampaign(campaignId, user);
+      if (campaign) {
+        campaigns = [campaign];
+      }
+    }
     
+    if (campaigns.length === 0) {
+      return {
+        columns: ['Agent Name', 'Team Leader', 'Campaign', ...dates],
+        rows: [],
+      };
+    }
+    
+    // Get all users from all selected campaigns
+    const campaignIds = campaigns.map(c => c.id);
+    const users = await this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.campaign', 'campaign')
+      .leftJoinAndSelect('user.teamLeader', 'teamLeader')
+      .where('user.campaignId IN (:...campaignIds)', { campaignIds })
+      .getMany();
+    
+    // Get time events for all campaigns
+    const timeEvents = await this.timeEventRepo
+      .createQueryBuilder('te')
+      .leftJoinAndSelect('te.user', 'user')
+      .leftJoinAndSelect('te.eventType', 'eventType')
+      .leftJoinAndSelect('te.campaign', 'campaign')
+      .where('te.campaignId IN (:...campaignIds)', { campaignIds })
+      .andWhere('te.timestampUtc BETWEEN :dateStart AND :dateEnd', { dateStart, dateEnd })
+      .getMany();
+    
+    // Get leave requests for all campaigns
     const leaveRequests = await this.leaveRequestRepo
       .createQueryBuilder('lr')
       .leftJoinAndSelect('lr.user', 'user')
       .leftJoinAndSelect('lr.leaveType', 'leaveType')
-      .where('lr.campaign = :campaignId', { campaignId: campaign.id })
+      .leftJoinAndSelect('lr.campaign', 'campaign')
+      .where('lr.campaignId IN (:...campaignIds)', { campaignIds })
       .andWhere('lr.status = :status', { status: LeaveStatus.APPROVED })
       .andWhere('lr.startUtc <= :dateEnd', { dateEnd })
       .andWhere('lr.endUtc >= :dateStart', { dateStart })
       .getMany();
 
-    const dates = this.getDatesInRange(from, to);
     const rows = users.map(u => {
       const row: any = {
         agentName: u.fullName,
-        teamLeader: u.designation || '',
-        campaign: campaign.name,
+        teamLeader: u.teamLeader?.fullName || '',
+        campaign: u.campaign?.name || '',
       };
       
       for (const d of dates) {
-        const status = this.getStatusForDate(u, d, timeEvents, leaveRequests);
-        const { workMinutes, breakMinutes } = this.calculateMinutesForDate(u, d, timeEvents);
+        // Filter time events and leave requests for this user
+        const userTimeEvents = timeEvents.filter(te => te.user.id === u.id);
+        const userLeaveRequests = leaveRequests.filter(lr => lr.user.id === u.id);
+        
+        const status = this.getStatusForDate(u, d, userTimeEvents, userLeaveRequests);
+        const { workMinutes, breakMinutes } = this.calculateMinutesForDate(u, d, userTimeEvents);
         const workHours = (workMinutes / 60).toFixed(2);
         row[d] = {
           status,
@@ -129,6 +221,16 @@ export class ReportsService {
 
   async getTooWeekly(fromWeek: string, toWeek: string, campaignId: string | undefined, user: any) {
     const campaign = await this.getCampaign(campaignId, user);
+    
+    // If no campaign found, return empty result
+    if (!campaign) {
+      return {
+        campaign: 'No Campaign',
+        columns: ['Metric'],
+        rows: [],
+      };
+    }
+    
     const fromDate = new Date(fromWeek);
     const toDate = new Date(toWeek);
     
@@ -306,18 +408,24 @@ export class ReportsService {
     return csv;
   }
 
-  private async getCampaign(campaignId: string | undefined, user: any): Promise<Campaign> {
+  private async getCampaign(campaignId: string | undefined, user: any): Promise<Campaign | null> {
     if (campaignId) {
       const campaign = await this.campaignRepo.findOne({ where: { id: campaignId } });
-      if (!campaign) throw new Error('Campaign not found');
+      if (!campaign) return null;
       return campaign;
     }
+    
+    // For MANAGER, get their assigned campaign
     if (user.role === Role.MANAGER) {
       const userEntity = await this.userRepo.findOne({ where: { id: user.userId }, relations: ['campaign'] });
-      if (!userEntity?.campaign) throw new Error('No campaign for manager');
-      return userEntity.campaign;
+      if (userEntity?.campaign) {
+        return userEntity.campaign;
+      }
     }
-    throw new Error('Campaign required for admin');
+    
+    // For ADMIN or if manager has no campaign, get the first available campaign
+    const firstCampaign = await this.campaignRepo.findOne({ where: {} });
+    return firstCampaign || null;
   }
 
   private getStatusForDate(user: User, date: string, timeEvents: TimeEvent[], leaveRequests: LeaveRequest[]): string {

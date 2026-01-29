@@ -1,6 +1,7 @@
 import {
   Column,
   Entity,
+  Index,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
@@ -9,6 +10,10 @@ import { Campaign } from '../campaigns/campaign.entity';
 import { LeaveType } from './leave-type.entity';
 import { LeaveStatus } from '../../common/enums/leave-status.enum';
 
+@Index(['user', 'startUtc'])
+@Index(['campaign', 'startUtc'])
+@Index(['status'])
+@Index(['startUtc', 'endUtc'])
 @Entity('leave_requests')
 export class LeaveRequest {
   @PrimaryGeneratedColumn('uuid')

@@ -16,6 +16,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { LeaveStatus } from '../../common/enums/leave-status.enum';
+import { CreateLeaveRequestDto } from '../../common/dto/create-leave-request.dto';
+import { UpdateLeaveStatusDto } from '../../common/dto/update-leave-status.dto';
 
 class LeaveRequestResponseDto {
   id: string;
@@ -30,13 +32,6 @@ class LeaveRequestResponseDto {
   reason?: string;
 }
 
-class CreateLeaveRequestDto {
-  leaveTypeId: string;
-  startDate: string; // YYYY-MM-DD
-  endDate: string;
-  reason?: string;
-}
-
 @ApiTags('leave-requests')
 @Controller('leave-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -45,16 +40,24 @@ export class LeaveRequestsController {
   constructor(private readonly leaveService: LeaveService) {}
 
   @Post()
-  @Roles(Role.EMPLOYEE)
-  @ApiOperation({ summary: 'Create a leave request' })
+  @Roles(Role.EMPLOYEE, Role.MANAGER, Role.ADMIN)
+  @ApiOperation({ summary: 'Create a leave request (any authenticated user)' })
   @ApiOkResponse({ type: LeaveRequestResponseDto })
   async create(@Body() dto: CreateLeaveRequestDto, @Req() req: any) {
     return this.leaveService.createLeaveRequest(dto, req.user.userId);
   }
 
+  @Get('me')
+  @Roles(Role.EMPLOYEE, Role.MANAGER, Role.ADMIN)
+  @ApiOperation({ summary: 'Get my leave requests' })
+  @ApiOkResponse({ type: [LeaveRequestResponseDto] })
+  async findMyRequests(@Req() req: any) {
+    return this.leaveService.findMyLeaveRequests(req.user.userId);
+  }
+
   @Get()
   @Roles(Role.MANAGER, Role.ADMIN)
-  @ApiOperation({ summary: 'List leave requests' })
+  @ApiOperation({ summary: 'List leave requests (Manager/Admin)' })
   @ApiOkResponse({ type: [LeaveRequestResponseDto] })
   async findAll(@Query() query: { campaignId?: string; userId?: string; status?: LeaveStatus; from?: string; to?: string }, @Req() req: any) {
     return this.leaveService.findLeaveRequests(query, req.user);
@@ -64,7 +67,7 @@ export class LeaveRequestsController {
   @Roles(Role.MANAGER, Role.ADMIN)
   @ApiOperation({ summary: 'Approve or reject leave request' })
   @ApiOkResponse({ type: LeaveRequestResponseDto })
-  async updateStatus(@Param('id') id: string, @Body() body: { status: LeaveStatus; reason?: string }, @Req() req: any) {
+  async updateStatus(@Param('id') id: string, @Body() body: UpdateLeaveStatusDto, @Req() req: any) {
     return this.leaveService.updateLeaveRequestStatus(id, body, req.user.userId);
   }
 }

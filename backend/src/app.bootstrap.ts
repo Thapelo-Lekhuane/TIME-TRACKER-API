@@ -2,6 +2,7 @@ import { INestApplication, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { UsersService } from './modules/users/users.service';
 import { EventTypesService } from './modules/event-types/event-types.service';
+import { LeaveService } from './modules/leave/leave.service';
 
 const logger = new Logger('Bootstrap');
 
@@ -10,6 +11,7 @@ export async function bootstrapAdmin(app: INestApplication) {
     const config = app.get(ConfigService);
     const usersService = app.get(UsersService);
     const eventTypesService = app.get(EventTypesService);
+    const leaveService = app.get(LeaveService);
 
     const email = config.get<string>('admin.email');
     const password = config.get<string>('admin.password');
@@ -29,6 +31,10 @@ export async function bootstrapAdmin(app: INestApplication) {
     logger.log('Seeding default event types...');
     await eventTypesService.seedDefaultEventTypes();
     logger.log('Default event types seeded successfully');
+
+    logger.log('Seeding default leave types...');
+    await leaveService.seedDefaultLeaveTypes();
+    logger.log('Default leave types seeded successfully');
   } catch (error) {
     logger.error('Error during bootstrap:', error);
     throw error;

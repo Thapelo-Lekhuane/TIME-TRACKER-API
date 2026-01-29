@@ -24,8 +24,8 @@ export class TimeEventsController {
   constructor(private readonly timeEventsService: TimeEventsService) {}
 
   @Post()
-  @Roles(Role.EMPLOYEE)
-  @ApiOperation({ summary: 'Clock in/out or break' })
+  @Roles(Role.EMPLOYEE, Role.MANAGER, Role.ADMIN)
+  @ApiOperation({ summary: 'Clock in/out or break (any authenticated user)' })
   @ApiOkResponse({ type: TimeEventResponseDto })
   async create(@Body() dto: CreateTimeEventDto, @Req() req: any) {
     return this.timeEventsService.create(dto.eventTypeId, req.user.userId);

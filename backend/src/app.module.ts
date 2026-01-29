@@ -4,6 +4,7 @@ import configuration from './config/configuration';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { getTypeOrmConfig } from './config/database.config';
 
+import { EmailModule } from './common/services/email.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
@@ -23,6 +24,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     TypeOrmModule.forRootAsync({
       useFactory: getTypeOrmConfig,
     }),
+    EmailModule,
     AuthModule,
     UsersModule,
     CampaignsModule,
