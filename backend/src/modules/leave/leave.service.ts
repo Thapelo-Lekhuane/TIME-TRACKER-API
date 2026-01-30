@@ -206,27 +206,22 @@ export class LeaveService {
     // Get base URL from config (default to localhost:3000 if not set)
     const baseUrl = process.env.BASE_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    // Find managers and admins to notify
-    // First find managers in the same campaign
+    // Notify campaign creator/manager (leave approver) and admins
+    // Campaign leave approver is set by the manager when creating/editing the campaign
     const campaignManagers = await this.userRepo.find({
-      where: { 
+      where: {
         role: Role.MANAGER,
-        campaign: { id: campaignId }
+        campaign: { id: campaignId },
       },
     });
-    
-    // Then find all admins
     const admins = await this.userRepo.find({
       where: { role: Role.ADMIN },
     });
-    
-    // Combine them
     const managers = [...campaignManagers, ...admins];
 
-    // Send email notifications to managers and admins
     const emailPromises: Promise<boolean>[] = [];
-    
-    // Send to leave approver email if configured
+
+    // Always send to campaign leave approver first (campaign creator/manager)
     if (leaveApproverEmail) {
       emailPromises.push(
         this.emailService.sendLeaveRequestNotification({
@@ -246,9 +241,11 @@ export class LeaveService {
           return false;
         })
       );
+    } else {
+      this.logger.warn(`Campaign "${campaignName}" has no leave approver email; set it in campaign settings so the manager receives leave requests.`);
     }
 
-    // Send to all managers and admins (avoid duplicates)
+    // Also send to managers (in campaign) and admins, avoiding duplicates
     const notifiedEmails = new Set<string>();
     if (leaveApproverEmail) {
       notifiedEmails.add(leaveApproverEmail.toLowerCase());

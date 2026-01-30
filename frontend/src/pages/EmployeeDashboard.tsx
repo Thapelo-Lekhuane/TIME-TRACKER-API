@@ -35,7 +35,7 @@ const EmployeeDashboard = () => {
   const [loading, setLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [status, setStatus] = useState<'out' | 'working' | 'lunch' | 'break'>('out');
-  const [totalWorkMinutes, setTotalWorkMinutes] = useState(0);
+  const [, setTotalWorkMinutes] = useState(0);
   const [totalBreakMinutes, setTotalBreakMinutes] = useState(0);
   
   // Leave related state
@@ -286,7 +286,6 @@ const EmployeeDashboard = () => {
   // Check if today falls within an approved leave request (date-only comparison)
   const isOnApprovedLeaveToday = (() => {
     const todayStr = currentTime.toISOString().split('T')[0];
-    const today = new Date(todayStr);
     return myLeaveRequests.some((r) => {
       if (r.status !== 'APPROVED') return false;
       const start = new Date(r.startUtc);

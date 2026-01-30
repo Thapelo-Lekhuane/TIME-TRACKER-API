@@ -339,6 +339,13 @@ const ManagerDashboard = () => {
     return '#f3f4f6';
   };
 
+  const thinBorder = {
+    top: { style: 'thin' as const },
+    left: { style: 'thin' as const },
+    bottom: { style: 'thin' as const },
+    right: { style: 'thin' as const },
+  };
+
   const exportWeeklyReportExcel = async () => {
     if (!weeklyAttendanceData?.columns || !weeklyAttendanceData?.rows?.length) {
       alert('Load a report first before exporting.');
@@ -352,6 +359,7 @@ const ManagerDashboard = () => {
     const headerRowObj = ws.getRow(1);
     headerRowObj.font = { bold: true };
     headerRowObj.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
+    headerRowObj.eachCell((c) => { c.border = thinBorder; });
     const sortedRows = [...weeklyAttendanceData.rows].sort((a: any, b: any) =>
       (a.campaign || 'ZZZ').localeCompare(b.campaign || 'ZZZ')
     );
@@ -378,6 +386,7 @@ const ManagerDashboard = () => {
       cells.push((row.totalWorkHours ?? 0).toFixed(1));
       const added = ws.addRow(cells);
       added.eachCell((cell, colNumber) => {
+        cell.border = thinBorder;
         if (colNumber <= 3 || colNumber === headerRow.length) {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: campaignArgb } };
         } else {
@@ -526,6 +535,70 @@ const ManagerDashboard = () => {
       console.error('Failed to export CSV', error);
       alert('Failed to export CSV');
     }
+  };
+
+  const exportDashboardExcel = async () => {
+    if (!attendanceData?.columns || !attendanceData?.rows?.length) {
+      alert('Load attendance data first (select date/range and ensure data is shown).');
+      return;
+    }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Attendance', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const cols = dateFilterType === 'daily'
+      ? ['Agent Name', 'Team Leader', 'Campaign', 'Today Status', 'Hours Worked']
+      : [...attendanceData.columns, 'Total Hours'];
+    ws.addRow(cols);
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
+    ws.getRow(1).eachCell((c) => { c.border = thinBorder; });
+    const sortedRows = [...attendanceData.rows].sort((a: any, b: any) =>
+      (a.campaign || 'ZZZ').localeCompare(b.campaign || 'ZZZ')
+    );
+    if (dateFilterType === 'daily') {
+      sortedRows.forEach((row: any) => {
+        const dateData = row[selectedDate];
+        const hours = dateData?.workHours ?? 0;
+        const r = ws.addRow([
+          row.agentName ?? '',
+          row.teamLeader ?? '',
+          row.campaign ?? '',
+          dateData?.status ?? 'Absent',
+          hours.toFixed(1),
+        ]);
+        r.eachCell((c) => { c.border = thinBorder; });
+      });
+    } else {
+      const dateCols = attendanceData.columns.slice(3);
+      sortedRows.forEach((row: any) => {
+        let total = 0;
+        const cells: (string | number)[] = [
+          row.agentName ?? '',
+          row.teamLeader ?? '',
+          row.campaign ?? '',
+        ];
+        dateCols.forEach((col: string) => {
+          const d = row[col];
+          if (d?.workHours) total += d.workHours;
+          cells.push(d ? `${d.status || ''} ${d.workHours ? d.workHours.toFixed(1) + 'h' : ''}`.trim() || '-' : '-');
+        });
+        cells.push(total.toFixed(1));
+        const r = ws.addRow(cells);
+        r.eachCell((c) => { c.border = thinBorder; });
+      });
+    }
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const fn = dateFilterType === 'daily'
+      ? `attendance-daily-${selectedDate}.xlsx`
+      : `attendance-${dateFilterType}-${dateRange.from}-to-${dateRange.to}.xlsx`;
+    link.setAttribute('download', fn);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   // Campaign CRUD handlers
@@ -892,6 +965,14 @@ const ManagerDashboard = () => {
                 
                 <button className="btn btn-secondary btn-sm" onClick={exportCSV}>
                   Export CSV
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={exportDashboardExcel}
+                  disabled={!attendanceData?.rows?.length}
+                  title="Download as Excel with table borders"
+                >
+                  Export Excel (table)
                 </button>
               </div>
               
@@ -1300,13 +1381,16 @@ const ManagerDashboard = () => {
                         {weeklyAttendanceData.columns.map((col: string, idx: number) => (
                           <th key={idx} style={{ 
                             position: idx < 3 ? 'sticky' : 'relative',
-                            left: idx === 0 ? 0 : idx === 1 ? '150px' : idx === 2 ? '300px' : 'auto',
+                            left: idx === 0 ? 0 : idx === 1 ? '120px' : idx === 2 ? '240px' : 'auto',
+                            minWidth: idx < 3 ? '120px' : '90px',
+                            maxWidth: idx < 3 ? '120px' : undefined,
                             backgroundColor: '#f9fafb',
-                            zIndex: idx < 3 ? 10 : 1,
+                            zIndex: idx < 3 ? 2 : 1,
                             borderRight: idx < 3 ? '2px solid #e5e7eb' : 'none',
-                            padding: '10px',
+                            padding: '8px 10px',
                             textAlign: 'left',
                             fontWeight: 600,
+                            boxShadow: idx === 2 ? '2px 0 4px rgba(0,0,0,0.06)' : 'none',
                           }}>
                             {col}
                           </th>
@@ -1314,11 +1398,13 @@ const ManagerDashboard = () => {
                         <th style={{ 
                           position: 'sticky',
                           right: 0,
+                          minWidth: '90px',
                           backgroundColor: '#f9fafb',
-                          zIndex: 10,
+                          zIndex: 2,
                           borderLeft: '2px solid #e5e7eb',
-                          padding: '10px',
+                          padding: '8px 10px',
                           fontWeight: 600,
+                          boxShadow: '-2px 0 4px rgba(0,0,0,0.06)',
                         }}>Total Hours</th>
                       </tr>
                     </thead>
@@ -1363,28 +1449,37 @@ const ManagerDashboard = () => {
                                 <td style={{ 
                                   position: 'sticky',
                                   left: 0,
+                                  minWidth: '120px',
+                                  maxWidth: '120px',
                                   backgroundColor: bgColor,
-                                  zIndex: 5,
+                                  zIndex: 2,
                                   borderRight: '2px solid #e5e7eb',
                                   borderLeft: `4px solid ${borderColor}`,
-                                  padding: '10px',
+                                  padding: '8px 10px',
+                                  boxShadow: '2px 0 4px rgba(0,0,0,0.06)',
                                 }}>{row.agentName}</td>
                                 <td style={{ 
                                   position: 'sticky',
-                                  left: '150px',
+                                  left: '120px',
+                                  minWidth: '120px',
+                                  maxWidth: '120px',
                                   backgroundColor: bgColor,
-                                  zIndex: 5,
+                                  zIndex: 2,
                                   borderRight: '2px solid #e5e7eb',
-                                  padding: '10px',
+                                  padding: '8px 10px',
+                                  boxShadow: '2px 0 4px rgba(0,0,0,0.06)',
                                 }}>{row.teamLeader}</td>
                                 <td style={{ 
                                   position: 'sticky',
-                                  left: '300px',
+                                  left: '240px',
+                                  minWidth: '120px',
+                                  maxWidth: '120px',
                                   backgroundColor: bgColor,
-                                  zIndex: 5,
+                                  zIndex: 2,
                                   borderRight: '2px solid #e5e7eb',
-                                  padding: '10px',
+                                  padding: '8px 10px',
                                   fontWeight: 600,
+                                  boxShadow: '2px 0 4px rgba(0,0,0,0.06)',
                                 }}><strong>{row.campaign || 'Unassigned'}</strong></td>
                                 {dateColumns.map((date: string) => {
                                   const dateData = row[date];
@@ -1401,6 +1496,9 @@ const ManagerDashboard = () => {
                                           textAlign: 'center',
                                           padding: '8px',
                                           border: '1px solid #e5e7eb',
+                                          minWidth: '90px',
+                                          position: 'relative',
+                                          zIndex: 1,
                                         }}
                                       >
                                         {isFutureDate ? '-' : ''}
@@ -1427,6 +1525,9 @@ const ManagerDashboard = () => {
                                         textAlign: 'center',
                                         padding: '8px',
                                         border: '1px solid #e5e7eb',
+                                        minWidth: '90px',
+                                        position: 'relative',
+                                        zIndex: 1,
                                       }}
                                     >
                                       <div style={{ fontWeight: 500 }}>{status}</div>
@@ -1446,12 +1547,14 @@ const ManagerDashboard = () => {
                                 <td style={{ 
                                   position: 'sticky',
                                   right: 0,
+                                  minWidth: '90px',
                                   backgroundColor: bgColor,
-                                  zIndex: 5,
+                                  zIndex: 2,
                                   borderLeft: '2px solid #e5e7eb',
                                   fontWeight: 'bold',
                                   textAlign: 'center',
-                                  padding: '10px',
+                                  padding: '8px 10px',
+                                  boxShadow: '-2px 0 4px rgba(0,0,0,0.06)',
                                 }}>
                                   {rowTotalHours.toFixed(1)}h
                                 </td>
