@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import React from 'react';
+import ExcelJS from 'exceljs';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/client';
 
@@ -19,6 +21,11 @@ interface Campaign {
   description?: string;
   timeZone?: string;
   leaveApproverEmail?: string;
+  workDayStart?: string | null;
+  workDayEnd?: string | null;
+  lunchStart?: string | null;
+  lunchEnd?: string | null;
+  teaBreaks?: { start: string; end: string }[] | null;
   users?: User[];
 }
 
@@ -36,6 +43,12 @@ const ManagerDashboard = () => {
   const [selectedCampaign, setSelectedCampaign] = useState<string>('');
   const [leaveFilterCampaign, setLeaveFilterCampaign] = useState<string>('');
   const [leaveFilterStatus, setLeaveFilterStatus] = useState<string>('PENDING');
+  
+  // Weekly attendance state
+  const [weeklyAttendanceData, setWeeklyAttendanceData] = useState<any>(null);
+  const [weeklyWeekStart, setWeeklyWeekStart] = useState<string>('');
+  const [weeklyCampaign, setWeeklyCampaign] = useState<string>('');
+  const [reportWeeksCount, setReportWeeksCount] = useState<1 | 2 | 3 | 4>(1);
   
   // Campaign CRUD state
   const [showCampaignModal, setShowCampaignModal] = useState(false);
@@ -59,12 +72,73 @@ const ManagerDashboard = () => {
   // Team Leader assignment state
   const [showTeamLeaderModal, setShowTeamLeaderModal] = useState(false);
   const [editingUserForTeamLeader, setEditingUserForTeamLeader] = useState<User | null>(null);
-  const [selectedTeamLeaderId, setSelectedTeamLeaderId] = useState<string>('');
+  const [selectedEmployeesForTeamLeader, setSelectedEmployeesForTeamLeader] = useState<string[]>([]);
+  const [confirmationStep, setConfirmationStep] = useState(1); // 1 = select employees, 2 = confirm
+
+  const addDays = (dateStr: string, days: number): string => {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+  };
+
+  const fetchWeeklyAttendance = async () => {
+    if (!weeklyWeekStart) return;
+
+    try {
+      if (reportWeeksCount === 1) {
+        let url = `/reports/attendance/weekly?weekStart=${weeklyWeekStart}`;
+        if (weeklyCampaign) url += `&campaignId=${weeklyCampaign}`;
+        const response = await api.get(url);
+        setWeeklyAttendanceData(response.data);
+      } else {
+        const toDate = addDays(weeklyWeekStart, reportWeeksCount * 7 - 1);
+        let url = `/reports/attendance/daily?from=${weeklyWeekStart}&to=${toDate}`;
+        if (weeklyCampaign) url += `&campaignId=${weeklyCampaign}`;
+        const response = await api.get(url);
+        const rangeData = response.data as { columns: string[]; rows: any[] };
+        const today = new Date().toISOString().split('T')[0];
+        const dateCols = rangeData.columns.slice(3);
+        const rowsWithTotals = rangeData.rows.map((row: any) => {
+          let totalWorkMinutes = 0;
+          for (const date of dateCols) {
+            if (date <= today && row[date]?.workMinutes) totalWorkMinutes += row[date].workMinutes;
+          }
+          const totalWorkHours = parseFloat((totalWorkMinutes / 60).toFixed(2));
+          const newRow: any = { ...row, totalWorkHours, totalWorkMinutes };
+          for (const date of dateCols) {
+            if (date > today) newRow[date] = null;
+          }
+          return newRow;
+        });
+        setWeeklyAttendanceData({
+          columns: rangeData.columns,
+          rows: rowsWithTotals,
+          weekStart: weeklyWeekStart,
+          weekEnd: toDate,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch weekly attendance', error);
+      alert('Failed to fetch weekly attendance data.');
+    }
+  };
 
   useEffect(() => {
     fetchCampaigns();
     fetchAllUsers();
+    // Set default week start to Monday of current week
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust to Monday
+    const monday = new Date(today.setDate(diff));
+    setWeeklyWeekStart(monday.toISOString().split('T')[0]);
   }, []);
+  
+  useEffect(() => {
+    if (weeklyWeekStart) {
+      fetchWeeklyAttendance();
+    }
+  }, [weeklyWeekStart, weeklyCampaign, reportWeeksCount]);
 
   useEffect(() => {
     fetchAttendanceDaily();
@@ -78,9 +152,7 @@ const ManagerDashboard = () => {
     try {
       const response = await api.get('/campaigns');
       setCampaigns(response.data);
-      if (response.data.length > 0 && !selectedCampaign) {
-        setSelectedCampaign(response.data[0].id);
-      }
+      // Don't auto-select first campaign - let user choose "All Campaigns" if they want
     } catch (error) {
       console.error('Failed to fetch campaigns', error);
     }
@@ -196,6 +268,140 @@ const ManagerDashboard = () => {
     };
   };
 
+  /** Returns the first Monday of the given month (YYYY-MM) as YYYY-MM-DD */
+  const getFirstMondayOfMonth = (monthStr: string): string => {
+    if (!monthStr || monthStr.length < 7) return '';
+    const [y, m] = monthStr.split('-').map(Number);
+    const first = new Date(y, m - 1, 1);
+    const day = first.getDay();
+    const diff = day === 0 ? 1 : day === 1 ? 0 : 8 - day;
+    const monday = new Date(y, m - 1, 1 + diff);
+    return monday.toISOString().split('T')[0];
+  };
+
+  const exportWeeklyReportCSV = () => {
+    if (!weeklyAttendanceData?.columns || !weeklyAttendanceData?.rows?.length) {
+      alert('Load a report first before exporting.');
+      return;
+    }
+    const cols = [...weeklyAttendanceData.columns, 'Total Hours'];
+    const escape = (v: unknown): string => {
+      const s = String(v ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = cols.map(escape).join(',');
+    const dateCols = weeklyAttendanceData.columns.slice(3);
+    const rows = weeklyAttendanceData.rows
+      .sort((a: any, b: any) => (a.campaign || 'ZZZ').localeCompare(b.campaign || 'ZZZ'))
+      .map((row: any) => {
+        const cells = [
+          row.agentName ?? '',
+          row.teamLeader ?? '',
+          row.campaign ?? '',
+          ...dateCols.map((d: string) => {
+            const data = row[d];
+            if (!data) return '';
+            const parts = [data.status || ''];
+            if (data.workHours > 0) parts.push(`${data.workHours.toFixed(1)}h`);
+            if (data.lateMinutes > 0) parts.push(`Late: ${data.lateMinutes}m`);
+            return parts.join(' ');
+          }),
+          (row.totalWorkHours ?? 0).toFixed(1),
+        ];
+        return cells.map(escape).join(',');
+      });
+    const csv = [header, ...rows].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `weekly-attendance-${weeklyWeekStart || 'report'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const hexToArgb = (hex: string): string => {
+    const h = hex.replace('#', '');
+    if (h.length === 6) return 'FF' + h.toUpperCase();
+    return 'FF' + (h.length === 8 ? h : h.slice(-6)).toUpperCase();
+  };
+
+  const getStatusColorHex = (status: string, _campaignBg: string): string => {
+    const statusLower = (status || '').toLowerCase();
+    if (statusLower.includes('present')) return '#d1fae5';
+    if (statusLower.includes('day off')) return '#f3f4f6';
+    if (statusLower.includes('annual leave')) return '#dbeafe';
+    if (statusLower.includes('sick leave')) return '#fce7f3';
+    if (statusLower.includes('maternity') || statusLower.includes('paternity')) return '#fef3c7';
+    if (statusLower.includes('absent')) return '#fee2e2';
+    return '#f3f4f6';
+  };
+
+  const exportWeeklyReportExcel = async () => {
+    if (!weeklyAttendanceData?.columns || !weeklyAttendanceData?.rows?.length) {
+      alert('Load a report first before exporting.');
+      return;
+    }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Attendance', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const dateCols = weeklyAttendanceData.columns.slice(3);
+    const headerRow = [...weeklyAttendanceData.columns, 'Total Hours'];
+    ws.addRow(headerRow);
+    const headerRowObj = ws.getRow(1);
+    headerRowObj.font = { bold: true };
+    headerRowObj.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
+    const sortedRows = [...weeklyAttendanceData.rows].sort((a: any, b: any) =>
+      (a.campaign || 'ZZZ').localeCompare(b.campaign || 'ZZZ')
+    );
+    const today = new Date().toISOString().split('T')[0];
+    for (const row of sortedRows) {
+      const bgHex = getCampaignColorHex(row.campaign);
+      const campaignArgb = hexToArgb(bgHex);
+      const cells: (string | number)[] = [
+        row.agentName ?? '',
+        row.teamLeader ?? '',
+        row.campaign ?? '',
+      ];
+      for (const date of dateCols) {
+        const data = row[date];
+        if (date > today || !data) {
+          cells.push('');
+        } else {
+          const parts = [data.status || ''];
+          if (data.workHours > 0) parts.push(`${data.workHours.toFixed(1)}h`);
+          if (data.lateMinutes > 0) parts.push(`Late: ${data.lateMinutes}m`);
+          cells.push(parts.join(' '));
+        }
+      }
+      cells.push((row.totalWorkHours ?? 0).toFixed(1));
+      const added = ws.addRow(cells);
+      added.eachCell((cell, colNumber) => {
+        if (colNumber <= 3 || colNumber === headerRow.length) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: campaignArgb } };
+        } else {
+          const date = dateCols[colNumber - 4];
+          const data = row[date];
+          const status = data?.status || '';
+          const fillHex = getStatusColorHex(status, bgHex);
+          const fillArgb = hexToArgb(fillHex.startsWith('#') ? fillHex : '#ffffff');
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
+        }
+      });
+    }
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `weekly-attendance-${weeklyWeekStart || 'report'}.xlsx`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
   const handleDateFilterChange = (type: 'daily' | 'weekly' | 'monthly') => {
     setDateFilterType(type);
     // Ensure we have a valid date
@@ -235,22 +441,87 @@ const ManagerDashboard = () => {
     }
   };
 
+  // Generate consistent color for each campaign based on name
+  const getCampaignColor = (campaignName: string | null | undefined): string => {
+    if (!campaignName) return '#f3f4f6';
+    // Hash campaign name to get consistent color
+    let hash = 0;
+    for (let i = 0; i < campaignName.length; i++) {
+      hash = campaignName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    // Generate pastel colors (light backgrounds)
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 40%, 95%)`; // Light pastel color
+  };
+
+  const getCampaignBorderColor = (campaignName: string | null | undefined): string => {
+    if (!campaignName) return '#e5e7eb';
+    let hash = 0;
+    for (let i = 0; i < campaignName.length; i++) {
+      hash = campaignName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 60%, 50%)`; // More saturated border color
+  };
+
+  /** Light pastel hex for Excel (same hue as getCampaignColor) */
+  const getCampaignColorHex = (campaignName: string | null | undefined): string => {
+    if (!campaignName) return '#f3f4f6';
+    let hash = 0;
+    for (let i = 0; i < campaignName.length; i++) {
+      hash = campaignName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    const s = 0.4, l = 0.95;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number) => {
+      const k = (n + hue / 30) % 12;
+      return l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    };
+    const r = Math.round(f(0) * 255);
+    const g = Math.round(f(8) * 255);
+    const b = Math.round(f(4) * 255);
+    return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+  };
+
   const exportCSV = async () => {
     try {
-      const response = await fetch(`/api/reports/attendance/daily/export?date=${selectedDate}${selectedCampaign ? `&campaignId=${selectedCampaign}` : ''}`, {
+      let url = '/api/reports/attendance/';
+      let filename = '';
+      
+      if (dateFilterType === 'daily') {
+        url += `daily/export?date=${selectedDate}`;
+        filename = `attendance-daily-${selectedDate}.csv`;
+      } else if (dateFilterType === 'weekly' || dateFilterType === 'monthly') {
+        if (!dateRange.from || !dateRange.to) {
+          alert('Please select date range for weekly/monthly export');
+          return;
+        }
+        url += `range/export?from=${dateRange.from}&to=${dateRange.to}`;
+        filename = `attendance-${dateFilterType}-${dateRange.from}-to-${dateRange.to}.csv`;
+      } else {
+        url += `daily/export?date=${selectedDate}`;
+        filename = `attendance-daily-${selectedDate}.csv`;
+      }
+      
+      if (selectedCampaign) {
+        url += `&campaignId=${selectedCampaign}`;
+      }
+      
+      const response = await fetch(`/api${url}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
       });
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const urlObj = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `attendance-${selectedDate}.csv`);
+      link.href = urlObj;
+      link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(urlObj);
     } catch (error) {
       console.error('Failed to export CSV', error);
       alert('Failed to export CSV');
@@ -282,11 +553,11 @@ const ManagerDashboard = () => {
       description: campaign.description || '',
       timeZone: campaign.timeZone || 'Africa/Johannesburg',
       leaveApproverEmail: campaign.leaveApproverEmail || '',
-      workDayStart: campaign.workDayStart || '',
-      workDayEnd: campaign.workDayEnd || '',
-      lunchStart: campaign.lunchStart || '',
-      lunchEnd: campaign.lunchEnd || '',
-      teaBreaks: (campaign.teaBreaks as Array<{ start: string; end: string }>) || [],
+      workDayStart: (campaign.workDayStart ?? '') || '',
+      workDayEnd: (campaign.workDayEnd ?? '') || '',
+      lunchStart: (campaign.lunchStart ?? '') || '',
+      lunchEnd: (campaign.lunchEnd ?? '') || '',
+      teaBreaks: (campaign.teaBreaks ?? []) || [],
     });
     setNewTeaBreak({ start: '', end: '' });
     setShowCampaignModal(true);
@@ -363,21 +634,52 @@ const ManagerDashboard = () => {
   };
 
   const handleAssignTeamLeader = (user: User) => {
+    if (!user.campaign) {
+      alert('This employee is not assigned to a campaign. Please assign them to a campaign first.');
+      return;
+    }
+    
     setEditingUserForTeamLeader(user);
-    setSelectedTeamLeaderId(user.teamLeaderId || '');
+    setSelectedEmployeesForTeamLeader([]);
+    setConfirmationStep(1);
     setShowTeamLeaderModal(true);
   };
 
   const handleSaveTeamLeader = async () => {
-    if (!editingUserForTeamLeader) return;
+    if (!editingUserForTeamLeader || confirmationStep !== 2 || selectedEmployeesForTeamLeader.length === 0) return;
     
     try {
-      await api.patch(`/users/${editingUserForTeamLeader.id}`, {
-        teamLeaderId: selectedTeamLeaderId || null,
+      const teamLeaderId = selectedEmployeesForTeamLeader[0];
+      const campaignId = editingUserForTeamLeader.campaign?.id;
+      
+      if (!campaignId) {
+        alert('Campaign ID is missing');
+        return;
+      }
+      
+      // Get all employees in the campaign (excluding managers)
+      const employeesToAssign = allUsers.filter(u => 
+        u.role === 'EMPLOYEE' && 
+        u.campaign?.id === campaignId
+      );
+      
+      if (employeesToAssign.length === 0) {
+        alert('No employees found in this campaign');
+        return;
+      }
+      
+      // Use bulk assignment endpoint
+      const response = await api.post('/users/assign-team-leader', {
+        campaignId: campaignId,
+        teamLeaderId: teamLeaderId,
       });
-      alert('Team leader assigned successfully');
+      
+      const teamLeader = allUsers.find(u => u.id === teamLeaderId);
+      alert(`Successfully assigned ${response.data.assignedCount} employee(s) to ${teamLeader?.fullName} as team leader. Emails have been sent.`);
       setShowTeamLeaderModal(false);
       setEditingUserForTeamLeader(null);
+      setSelectedEmployeesForTeamLeader([]);
+      setConfirmationStep(1);
       fetchAllUsers();
       fetchAttendanceDaily();
     } catch (error: any) {
@@ -522,25 +824,57 @@ const ManagerDashboard = () => {
                   </div>
                 )}
                 
-                {(dateFilterType === 'weekly' || dateFilterType === 'monthly') && (
+                {dateFilterType === 'weekly' && (
                   <>
+                    <div className="filter-group">
+                      <label className="form-label">Week Start (Monday):</label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={dateRange.from}
+                        onChange={(e) => {
+                          const range = getWeekRange(e.target.value);
+                          setDateRange(range);
+                        }}
+                      />
+                    </div>
+                    <div className="filter-group">
+                      <label className="form-label">Week End (Sunday):</label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={dateRange.to}
+                        readOnly
+                        style={{ backgroundColor: '#f3f4f6', cursor: 'not-allowed' }}
+                      />
+                    </div>
+                  </>
+                )}
+                {dateFilterType === 'monthly' && (
+                  <>
+                    <div className="filter-group">
+                      <label className="form-label">Month:</label>
+                      <input
+                        type="month"
+                        className="form-input"
+                        value={dateRange.from ? dateRange.from.substring(0, 7) : ''}
+                        onChange={(e) => {
+                          const month = e.target.value; // Format: YYYY-MM
+                          if (month) {
+                            const range = getMonthRange(month + '-01');
+                            setDateRange(range);
+                          }
+                        }}
+                      />
+                    </div>
                     <div className="filter-group">
                       <label className="form-label">From:</label>
                       <input
                         type="date"
                         className="form-input"
                         value={dateRange.from}
-                        onChange={(e) => {
-                          const newRange = { ...dateRange, from: e.target.value };
-                          setDateRange(newRange);
-                          if (dateFilterType === 'weekly') {
-                            const range = getWeekRange(e.target.value);
-                            setDateRange(range);
-                          } else if (dateFilterType === 'monthly') {
-                            const range = getMonthRange(e.target.value);
-                            setDateRange(range);
-                          }
-                        }}
+                        readOnly
+                        style={{ backgroundColor: '#f3f4f6', cursor: 'not-allowed' }}
                       />
                     </div>
                     <div className="filter-group">
@@ -549,7 +883,8 @@ const ManagerDashboard = () => {
                         type="date"
                         className="form-input"
                         value={dateRange.to}
-                        onChange={(e) => setDateRange({ ...dateRange, to: e.target.value })}
+                        readOnly
+                        style={{ backgroundColor: '#f3f4f6', cursor: 'not-allowed' }}
                       />
                     </div>
                   </>
@@ -567,33 +902,124 @@ const ManagerDashboard = () => {
                       <th>Agent Name</th>
                       <th>Team Leader</th>
                       <th>Campaign</th>
-                      <th>Today Status</th>
-                      <th>Hours Worked</th>
+                      {dateFilterType === 'daily' ? (
+                        <>
+                          <th>Today Status</th>
+                          <th>Hours Worked</th>
+                        </>
+                      ) : (
+                        <>
+                          {attendanceData?.columns?.slice(3).map((col: string) => (
+                            <th key={col}>{col}</th>
+                          ))}
+                          <th>Total Hours</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
-                    {attendanceData?.rows?.map((row: any, idx: number) => {
-                      const dateData = row[selectedDate];
-                      const status = dateData?.status || 'Absent';
-                      const hours = dateData?.workHours || 0;
-                      return (
-                        <tr key={idx}>
-                          <td>{row.agentName}</td>
-                          <td>{row.teamLeader}</td>
-                          <td>{row.campaign}</td>
-                          <td>
-                            <span className={`badge badge-${status.toLowerCase().replace(' ', '-')}`}>
-                              {status}
-                            </span>
+                    {(() => {
+                      if (!attendanceData?.rows || attendanceData.rows.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={dateFilterType === 'daily' ? 5 : (attendanceData?.columns?.length || 5) + 1} className="text-center">No data available</td>
+                          </tr>
+                        );
+                      }
+                      
+                      // Sort rows by campaign name to group them
+                      const sortedRows = [...attendanceData.rows].sort((a, b) => {
+                        const campaignA = a.campaign || 'ZZZ';
+                        const campaignB = b.campaign || 'ZZZ';
+                        return campaignA.localeCompare(campaignB);
+                      });
+                      
+                      let currentCampaign = '';
+                      let totalHours = 0;
+                      
+                      return sortedRows.map((row: any, idx: number) => {
+                        const campaignChanged = currentCampaign !== row.campaign;
+                        currentCampaign = row.campaign || '';
+                        
+                        let rowHours = 0;
+                        if (dateFilterType === 'daily') {
+                          const dateData = row[selectedDate];
+                          rowHours = dateData?.workHours || 0;
+                        } else {
+                          // Calculate total hours for range
+                          attendanceData.columns.slice(3).forEach((col: string) => {
+                            const dateData = row[col];
+                            if (dateData?.workHours) {
+                              rowHours += dateData.workHours;
+                            }
+                          });
+                        }
+                        totalHours += rowHours;
+                        
+                        const bgColor = getCampaignColor(row.campaign);
+                        const borderColor = getCampaignBorderColor(row.campaign);
+                        
+                        return (
+                          <React.Fragment key={idx}>
+                            {campaignChanged && idx > 0 && (
+                              <tr style={{ height: '4px', backgroundColor: '#e5e7eb' }}>
+                                <td colSpan={dateFilterType === 'daily' ? 5 : (attendanceData.columns.length + 1)}></td>
+                              </tr>
+                            )}
+                            <tr style={{ 
+                              backgroundColor: bgColor,
+                              borderLeft: `4px solid ${borderColor}`,
+                            }}>
+                              <td>{row.agentName}</td>
+                              <td>{row.teamLeader}</td>
+                              <td><strong>{row.campaign || 'Unassigned'}</strong></td>
+                              {dateFilterType === 'daily' ? (
+                                <>
+                                  <td>
+                                    <span className={`badge badge-${(row[selectedDate]?.status || 'Absent').toLowerCase().replace(' ', '-')}`}>
+                                      {row[selectedDate]?.status || 'Absent'}
+                                    </span>
+                                  </td>
+                                  <td>{rowHours.toFixed(1)}h</td>
+                                </>
+                              ) : (
+                                <>
+                                  {attendanceData.columns.slice(3).map((col: string) => {
+                                    const dateData = row[col];
+                                    return (
+                                      <td key={col}>
+                                        {dateData ? (
+                                          <>
+                                            <div>{dateData.status}</div>
+                                            <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                                              {dateData.workHours.toFixed(1)}h
+                                            </div>
+                                          </>
+                                        ) : '-'}
+                                      </td>
+                                    );
+                                  })}
+                                  <td><strong>{rowHours.toFixed(1)}h</strong></td>
+                                </>
+                              )}
+                            </tr>
+                          </React.Fragment>
+                        );
+                      }).concat(
+                        <tr key="total" style={{ 
+                          backgroundColor: '#f3f4f6',
+                          fontWeight: 'bold',
+                          borderTop: '2px solid #2563eb',
+                        }}>
+                          <td colSpan={dateFilterType === 'daily' ? 4 : attendanceData.columns.length - 1}>
+                            <strong>Total Hours</strong>
                           </td>
-                          <td>{hours.toFixed(1)}h</td>
+                          <td>
+                            <strong>{totalHours.toFixed(1)}h</strong>
+                          </td>
                         </tr>
                       );
-                    }) || (
-                      <tr>
-                        <td colSpan={5} className="text-center">No data available</td>
-                      </tr>
-                    )}
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -725,56 +1151,58 @@ const ManagerDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {leaveRequests.map(req => {
-                      const startDate = new Date(req.startUtc);
-                      const endDate = new Date(req.endUtc);
-                      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                      return (
-                        <tr key={req.id}>
-                          <td>{req.user?.fullName}</td>
-                          <td>{req.campaign?.name || '-'}</td>
-                          <td>{req.leaveType?.name}</td>
-                          <td>{startDate.toLocaleDateString()}</td>
-                          <td>{endDate.toLocaleDateString()}</td>
-                          <td>{days}</td>
-                          <td>{req.reason || '-'}</td>
-                          <td>
-                            <span className={`badge badge-${req.status?.toLowerCase() || 'pending'}`}>
-                              {req.status || 'Pending'}
-                            </span>
-                          </td>
-                          <td>
-                            {req.status === 'PENDING' && (
-                              <>
-                                <button
-                                  className="btn btn-primary btn-sm"
-                                  onClick={() => handleApproveLeave(req.id)}
-                                  style={{ marginRight: '8px' }}
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  className="btn btn-danger btn-sm"
-                                  onClick={() => handleRejectLeave(req.id)}
-                                >
-                                  Reject
-                                </button>
-                              </>
-                            )}
-                            {req.status !== 'PENDING' && (
-                              <span className="text-small" style={{ color: 'var(--text-muted)' }}>
-                                {req.approvedBy ? `By ${req.approvedBy.fullName}` : 'Processed'}
+                    <>
+                      {leaveRequests.map(req => {
+                        const startDate = new Date(req.startUtc);
+                        const endDate = new Date(req.endUtc);
+                        const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                        return (
+                          <tr key={req.id}>
+                            <td>{req.user?.fullName}</td>
+                            <td>{req.campaign?.name || '-'}</td>
+                            <td>{req.leaveType?.name}</td>
+                            <td>{startDate.toLocaleDateString()}</td>
+                            <td>{endDate.toLocaleDateString()}</td>
+                            <td>{days}</td>
+                            <td>{req.reason || '-'}</td>
+                            <td>
+                              <span className={`badge badge-${req.status?.toLowerCase() || 'pending'}`}>
+                                {req.status || 'Pending'}
                               </span>
-                            )}
-                          </td>
+                            </td>
+                            <td>
+                              {req.status === 'PENDING' && (
+                                <>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => handleApproveLeave(req.id)}
+                                    style={{ marginRight: '8px' }}
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    className="btn btn-danger btn-sm"
+                                    onClick={() => handleRejectLeave(req.id)}
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+                              {req.status !== 'PENDING' && (
+                                <span className="text-small" style={{ color: 'var(--text-muted)' }}>
+                                  {req.approvedBy ? `By ${req.approvedBy.fullName}` : 'Processed'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {leaveRequests.length === 0 && (
+                        <tr>
+                          <td colSpan={9} className="text-center">No leave requests found</td>
                         </tr>
-                      );
-                    })}
-                    {leaveRequests.length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="text-center">No leave requests found</td>
-                      </tr>
-                    )}
+                      )}
+                    </>
                   </tbody>
                 </table>
               </div>
@@ -783,9 +1211,291 @@ const ManagerDashboard = () => {
           
           {currentSection === 'reports' && (
             <div className="section">
-              <h2>Reports</h2>
-              <p className="text-small">Generate and view team performance reports</p>
-              <p className="text-small">Reports functionality coming soon...</p>
+              <h2>Weekly Team Attendance</h2>
+              <p className="text-small">View weekly attendance with total hours worked</p>
+              
+              <div className="filters" style={{ marginBottom: 'var(--spacing-md)' }}>
+                <div className="filter-group">
+                  <label className="form-label">Month:</label>
+                  <input
+                    type="month"
+                    className="form-input"
+                    value={weeklyWeekStart ? weeklyWeekStart.substring(0, 7) : ''}
+                    onChange={(e) => {
+                      const month = e.target.value;
+                      if (month) {
+                        const firstMonday = getFirstMondayOfMonth(month);
+                        if (firstMonday) setWeeklyWeekStart(firstMonday);
+                      }
+                    }}
+                  />
+                </div>
+                <div className="filter-group">
+                  <label className="form-label">Week Start (Monday):</label>
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={weeklyWeekStart}
+                    onChange={(e) => {
+                      setWeeklyWeekStart(e.target.value);
+                    }}
+                  />
+                </div>
+                <div className="filter-group">
+                  <label className="form-label">Weeks:</label>
+                  <select
+                    className="form-input"
+                    style={{ width: '90px' }}
+                    value={reportWeeksCount}
+                    onChange={(e) => setReportWeeksCount(Number(e.target.value) as 1 | 2 | 3 | 4)}
+                  >
+                    <option value={1}>1 week</option>
+                    <option value={2}>2 weeks</option>
+                    <option value={3}>3 weeks</option>
+                    <option value={4}>4 weeks</option>
+                  </select>
+                </div>
+                <div className="filter-group">
+                  <label className="form-label">Campaign:</label>
+                  <select
+                    className="form-input"
+                    style={{ width: '200px' }}
+                    value={weeklyCampaign}
+                    onChange={(e) => {
+                      setWeeklyCampaign(e.target.value);
+                    }}
+                  >
+                    <option value="">All Campaigns</option>
+                    {campaigns.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={fetchWeeklyAttendance}>
+                  Load Report
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={exportWeeklyReportCSV}
+                  disabled={!weeklyAttendanceData?.rows?.length}
+                  title={weeklyAttendanceData?.rows?.length ? 'Download as CSV' : 'Load a report first'}
+                >
+                  Export CSV
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={exportWeeklyReportExcel}
+                  disabled={!weeklyAttendanceData?.rows?.length}
+                  title={weeklyAttendanceData?.rows?.length ? 'Download as Excel with colors' : 'Load a report first'}
+                >
+                  Export Excel (with colors)
+                </button>
+              </div>
+              
+              {weeklyAttendanceData && (
+                <div className="table-container" style={{ overflowX: 'auto' }}>
+                  <table style={{ minWidth: '800px', fontSize: '14px' }}>
+                    <thead>
+                      <tr>
+                        {weeklyAttendanceData.columns.map((col: string, idx: number) => (
+                          <th key={idx} style={{ 
+                            position: idx < 3 ? 'sticky' : 'relative',
+                            left: idx === 0 ? 0 : idx === 1 ? '150px' : idx === 2 ? '300px' : 'auto',
+                            backgroundColor: '#f9fafb',
+                            zIndex: idx < 3 ? 10 : 1,
+                            borderRight: idx < 3 ? '2px solid #e5e7eb' : 'none',
+                            padding: '10px',
+                            textAlign: 'left',
+                            fontWeight: 600,
+                          }}>
+                            {col}
+                          </th>
+                        ))}
+                        <th style={{ 
+                          position: 'sticky',
+                          right: 0,
+                          backgroundColor: '#f9fafb',
+                          zIndex: 10,
+                          borderLeft: '2px solid #e5e7eb',
+                          padding: '10px',
+                          fontWeight: 600,
+                        }}>Total Hours</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        if (!weeklyAttendanceData.rows || weeklyAttendanceData.rows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={weeklyAttendanceData.columns.length + 1} className="text-center">No data available</td>
+                            </tr>
+                          );
+                        }
+                        
+                        // Sort rows by campaign to group them
+                        const sortedRows = [...weeklyAttendanceData.rows].sort((a, b) => {
+                          const campaignA = a.campaign || 'ZZZ';
+                          const campaignB = b.campaign || 'ZZZ';
+                          return campaignA.localeCompare(campaignB);
+                        });
+                        
+                        const dateColumns = weeklyAttendanceData.columns.slice(3);
+                        let currentCampaign = '';
+                        let grandTotalHours = 0;
+                        
+                        const rows = sortedRows.map((row: any, rowIdx: number) => {
+                          const campaignChanged = currentCampaign !== row.campaign;
+                          currentCampaign = row.campaign || '';
+                          
+                          const bgColor = getCampaignColor(row.campaign);
+                          const borderColor = getCampaignBorderColor(row.campaign);
+                          const rowTotalHours = row.totalWorkHours || 0;
+                          grandTotalHours += rowTotalHours;
+                          
+                          return (
+                            <React.Fragment key={rowIdx}>
+                              {campaignChanged && rowIdx > 0 && (
+                                <tr style={{ height: '4px', backgroundColor: '#e5e7eb' }}>
+                                  <td colSpan={weeklyAttendanceData.columns.length + 1}></td>
+                                </tr>
+                              )}
+                              <tr style={{ backgroundColor: bgColor }}>
+                                <td style={{ 
+                                  position: 'sticky',
+                                  left: 0,
+                                  backgroundColor: bgColor,
+                                  zIndex: 5,
+                                  borderRight: '2px solid #e5e7eb',
+                                  borderLeft: `4px solid ${borderColor}`,
+                                  padding: '10px',
+                                }}>{row.agentName}</td>
+                                <td style={{ 
+                                  position: 'sticky',
+                                  left: '150px',
+                                  backgroundColor: bgColor,
+                                  zIndex: 5,
+                                  borderRight: '2px solid #e5e7eb',
+                                  padding: '10px',
+                                }}>{row.teamLeader}</td>
+                                <td style={{ 
+                                  position: 'sticky',
+                                  left: '300px',
+                                  backgroundColor: bgColor,
+                                  zIndex: 5,
+                                  borderRight: '2px solid #e5e7eb',
+                                  padding: '10px',
+                                  fontWeight: 600,
+                                }}><strong>{row.campaign || 'Unassigned'}</strong></td>
+                                {dateColumns.map((date: string) => {
+                                  const dateData = row[date];
+                                  const today = new Date().toISOString().split('T')[0];
+                                  const isFutureDate = date > today;
+                                  
+                                  // If future date or no data, show blank
+                                  if (isFutureDate || !dateData) {
+                                    return (
+                                      <td 
+                                        key={date}
+                                        style={{
+                                          backgroundColor: bgColor,
+                                          textAlign: 'center',
+                                          padding: '8px',
+                                          border: '1px solid #e5e7eb',
+                                        }}
+                                      >
+                                        {isFutureDate ? '-' : ''}
+                                      </td>
+                                    );
+                                  }
+                                  
+                                  const status = dateData?.status || 'Absent';
+                                  const getStatusColor = (s: string) => {
+                                    const statusLower = s.toLowerCase();
+                                    if (statusLower.includes('present')) return '#d1fae5'; // Light green
+                                    if (statusLower.includes('day off')) return '#f3f4f6'; // Gray
+                                    if (statusLower.includes('annual leave')) return '#dbeafe'; // Light blue
+                                    if (statusLower.includes('sick leave')) return '#fce7f3'; // Light pink
+                                    if (statusLower.includes('maternity') || statusLower.includes('paternity')) return '#fef3c7'; // Yellow
+                                    if (statusLower.includes('absent')) return '#fee2e2'; // Red
+                                    return bgColor; // Use campaign color as fallback
+                                  };
+                                  return (
+                                    <td 
+                                      key={date}
+                                      style={{
+                                        backgroundColor: getStatusColor(status),
+                                        textAlign: 'center',
+                                        padding: '8px',
+                                        border: '1px solid #e5e7eb',
+                                      }}
+                                    >
+                                      <div style={{ fontWeight: 500 }}>{status}</div>
+                                      {dateData?.workHours > 0 && (
+                                        <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                                          {dateData.workHours.toFixed(1)}h
+                                        </div>
+                                      )}
+                                      {dateData?.lateMinutes > 0 && (
+                                        <div style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold', marginTop: '2px' }}>
+                                          Late: {dateData.lateMinutes}m
+                                        </div>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                                <td style={{ 
+                                  position: 'sticky',
+                                  right: 0,
+                                  backgroundColor: bgColor,
+                                  zIndex: 5,
+                                  borderLeft: '2px solid #e5e7eb',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                  padding: '10px',
+                                }}>
+                                  {rowTotalHours.toFixed(1)}h
+                                </td>
+                              </tr>
+                            </React.Fragment>
+                          );
+                        });
+                        
+                        // Add total row
+                        rows.push(
+                          <tr key="total" style={{ 
+                            backgroundColor: '#f3f4f6',
+                            fontWeight: 'bold',
+                            borderTop: '2px solid #2563eb',
+                          }}>
+                            <td colSpan={weeklyAttendanceData.columns.length} style={{ padding: '10px' }}>
+                              <strong>Total Hours</strong>
+                            </td>
+                            <td style={{ 
+                              position: 'sticky',
+                              right: 0,
+                              backgroundColor: '#f3f4f6',
+                              zIndex: 5,
+                              borderLeft: '2px solid #e5e7eb',
+                              textAlign: 'center',
+                              padding: '10px',
+                            }}>
+                              <strong>{grandTotalHours.toFixed(1)}h</strong>
+                            </td>
+                          </tr>
+                        );
+                        
+                        return rows;
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              
+              {!weeklyAttendanceData && (
+                <div style={{ textAlign: 'center', padding: 'var(--spacing-lg)', color: '#6b7280' }}>
+                  Select a week start date and click "Load Report" to view weekly attendance
+                </div>
+              )}
             </div>
           )}
           
@@ -878,22 +1588,50 @@ const ManagerDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {allUsers.filter(u => u.role === 'EMPLOYEE').map(u => (
-                      <tr key={u.id}>
-                        <td>{u.fullName}</td>
-                        <td>{u.email}</td>
-                        <td>{u.campaign?.name || 'Unassigned'}</td>
-                        <td>{u.teamLeader?.fullName || 'None'}</td>
-                        <td>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            onClick={() => handleAssignTeamLeader(u)}
-                          >
-                            Assign Team Leader
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      const employees = allUsers.filter(u => u.role === 'EMPLOYEE');
+                      // Sort by campaign to group them
+                      const sortedEmployees = [...employees].sort((a, b) => {
+                        const campaignA = a.campaign?.name || 'ZZZ';
+                        const campaignB = b.campaign?.name || 'ZZZ';
+                        return campaignA.localeCompare(campaignB);
+                      });
+                      
+                      let currentCampaign = '';
+                      return sortedEmployees.map((u, idx) => {
+                        const campaignChanged = currentCampaign !== (u.campaign?.name || '');
+                        currentCampaign = u.campaign?.name || '';
+                        const bgColor = getCampaignColor(u.campaign?.name || undefined);
+                        const borderColor = getCampaignBorderColor(u.campaign?.name || undefined);
+                        
+                        return (
+                          <React.Fragment key={u.id}>
+                            {campaignChanged && idx > 0 && (
+                              <tr style={{ height: '4px', backgroundColor: '#e5e7eb' }}>
+                                <td colSpan={5}></td>
+                              </tr>
+                            )}
+                            <tr style={{ 
+                              backgroundColor: bgColor,
+                              borderLeft: `4px solid ${borderColor}`,
+                            }}>
+                              <td>{u.fullName}</td>
+                              <td>{u.email}</td>
+                              <td><strong>{u.campaign?.name || 'Unassigned'}</strong></td>
+                              <td>{u.teamLeader?.fullName || 'None'}</td>
+                              <td>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => handleAssignTeamLeader(u)}
+                                >
+                                  Assign Team Leader
+                                </button>
+                              </td>
+                            </tr>
+                          </React.Fragment>
+                        );
+                      });
+                    })()}
                     {allUsers.filter(u => u.role === 'EMPLOYEE').length === 0 && (
                       <tr>
                         <td colSpan={5} className="text-center">No employees found</td>
@@ -908,7 +1646,7 @@ const ManagerDashboard = () => {
       </div>
 
       {/* Team Leader Assignment Modal */}
-      {showTeamLeaderModal && editingUserForTeamLeader && (
+      {showTeamLeaderModal && editingUserForTeamLeader && editingUserForTeamLeader.campaign && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -925,48 +1663,209 @@ const ManagerDashboard = () => {
             backgroundColor: 'white',
             borderRadius: 'var(--radius-lg)',
             padding: 'var(--spacing-lg)',
-            maxWidth: '500px',
+            maxWidth: '800px',
             width: '90%',
+            maxHeight: '90vh',
+            overflowY: 'auto',
           }}>
-            <h3>Assign Team Leader</h3>
-            <p className="text-small">Select a team leader for {editingUserForTeamLeader.fullName}</p>
+            <h3>Assign Team Leader for Campaign</h3>
+            <p className="text-small">
+              Campaign: <strong>{editingUserForTeamLeader.campaign.name}</strong>
+            </p>
             
-            <div className="form-group" style={{ marginTop: 'var(--spacing-md)' }}>
-              <label className="form-label">Team Leader:</label>
-              <select
-                className="form-input"
-                value={selectedTeamLeaderId}
-                onChange={(e) => setSelectedTeamLeaderId(e.target.value)}
-              >
-                <option value="">None (Unassign)</option>
-                {allUsers
-                  .filter(u => u.role === 'MANAGER' || u.role === 'EMPLOYEE')
-                  .filter(u => u.id !== editingUserForTeamLeader.id)
-                  .map(u => (
-                    <option key={u.id} value={u.id}>
-                      {u.fullName} ({u.email}) - {u.role}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            
-            <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end', marginTop: 'var(--spacing-md)' }}>
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  setShowTeamLeaderModal(false);
-                  setEditingUserForTeamLeader(null);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSaveTeamLeader}
-              >
-                Save
-              </button>
-            </div>
+            {confirmationStep === 1 ? (
+              <>
+                <div style={{ marginTop: 'var(--spacing-md)' }}>
+                  <p style={{ marginBottom: 'var(--spacing-md)', fontWeight: 500 }}>
+                    Select ONE team leader for this campaign. All employees (except managers) will be assigned to this team leader:
+                  </p>
+                  
+                  {(() => {
+                    const campaignId = editingUserForTeamLeader.campaign?.id;
+                    // Get all users from the same campaign who can be team leaders (EMPLOYEE or MANAGER role, but exclude MANAGER role for assignment)
+                    const potentialTeamLeaders = campaignId
+                      ? allUsers.filter(u => 
+                          (u.role === 'EMPLOYEE' || u.role === 'MANAGER') && 
+                          u.campaign?.id === campaignId
+                        )
+                      : [];
+                    
+                    // Get all employees who will be assigned (excluding managers)
+                    const employeesToAssign = campaignId
+                      ? allUsers.filter(u => 
+                          u.role === 'EMPLOYEE' && 
+                          u.campaign?.id === campaignId
+                        )
+                      : [];
+                    
+                    return (
+                      <>
+                        <div className="form-group" style={{ marginTop: 'var(--spacing-md)' }}>
+                          <label className="form-label">Select Team Leader:</label>
+                          <select
+                            className="form-input"
+                            value={selectedEmployeesForTeamLeader[0] || ''}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setSelectedEmployeesForTeamLeader([e.target.value]);
+                              } else {
+                                setSelectedEmployeesForTeamLeader([]);
+                              }
+                            }}
+                            style={{ width: '100%' }}
+                          >
+                            <option value="">-- Select Team Leader --</option>
+                            {potentialTeamLeaders.map(u => (
+                              <option key={u.id} value={u.id}>
+                                {u.fullName} ({u.email}) - {u.role}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        
+                        {selectedEmployeesForTeamLeader[0] && (
+                          <div style={{ marginTop: 'var(--spacing-md)' }}>
+                            <p style={{ fontWeight: 500, marginBottom: 'var(--spacing-sm)' }}>
+                              Employees who will be assigned to this team leader ({employeesToAssign.length}):
+                            </p>
+                            <div className="table-container" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>Employee Name</th>
+                                    <th>Email</th>
+                                    <th>Current Team Leader</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {employeesToAssign.map((employee) => {
+                                    const bgColor = getCampaignColor(employee.campaign?.name);
+                                    const borderColor = getCampaignBorderColor(employee.campaign?.name);
+                                    
+                                    return (
+                                      <tr 
+                                        key={employee.id} 
+                                        style={{ 
+                                          backgroundColor: bgColor,
+                                          borderLeft: `4px solid ${borderColor}`,
+                                        }}
+                                      >
+                                        <td><strong>{employee.fullName}</strong></td>
+                                        <td>{employee.email}</td>
+                                        <td>{employee.teamLeader?.fullName || 'None'}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {employeesToAssign.length === 0 && (
+                                    <tr>
+                                      <td colSpan={3} className="text-center">No employees found in this campaign</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+                
+                <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end', marginTop: 'var(--spacing-md)' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowTeamLeaderModal(false);
+                      setEditingUserForTeamLeader(null);
+                      setSelectedEmployeesForTeamLeader([]);
+                      setConfirmationStep(1);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      if (selectedEmployeesForTeamLeader.length === 0) {
+                        alert('Please select a team leader');
+                        return;
+                      }
+                      setConfirmationStep(2);
+                    }}
+                    disabled={selectedEmployeesForTeamLeader.length === 0}
+                  >
+                    Continue
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ 
+                  marginTop: 'var(--spacing-md)', 
+                  padding: 'var(--spacing-md)', 
+                  backgroundColor: '#fef3c7',
+                  borderRadius: 'var(--radius-md)',
+                  border: '2px solid #f59e0b'
+                }}>
+                  <h4 style={{ marginTop: 0, color: '#92400e' }}>Confirm Assignment</h4>
+                  {(() => {
+                    const teamLeader = allUsers.find(u => u.id === selectedEmployeesForTeamLeader[0]);
+                    const campaignId = editingUserForTeamLeader.campaign?.id;
+                    const employeesToAssign = campaignId
+                      ? allUsers.filter(u => 
+                          u.role === 'EMPLOYEE' && 
+                          u.campaign?.id === campaignId
+                        )
+                      : [];
+                    
+                    return (
+                      <>
+                        <p style={{ marginBottom: 'var(--spacing-sm)' }}>
+                          You are about to assign <strong>{teamLeader?.fullName}</strong> as the team leader for campaign <strong>{editingUserForTeamLeader.campaign.name}</strong>.
+                        </p>
+                        <p style={{ marginBottom: 'var(--spacing-sm)', fontWeight: 500 }}>
+                          The following {employeesToAssign.length} employee(s) will be assigned to this team leader:
+                        </p>
+                        <ul style={{ marginLeft: '20px', marginBottom: 0 }}>
+                          {employeesToAssign.map(emp => (
+                            <li key={emp.id}><strong>{emp.fullName}</strong> ({emp.email})</li>
+                          ))}
+                        </ul>
+                        <p style={{ marginTop: 'var(--spacing-md)', marginBottom: 0, fontWeight: 500 }}>
+                          All employees (except managers) in this campaign will report to {teamLeader?.fullName}.
+                        </p>
+                      </>
+                    );
+                  })()}
+                </div>
+                
+                <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end', marginTop: 'var(--spacing-md)' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setConfirmationStep(1)}
+                  >
+                    Back
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => {
+                      setShowTeamLeaderModal(false);
+                      setEditingUserForTeamLeader(null);
+                      setSelectedEmployeesForTeamLeader([]);
+                      setConfirmationStep(1);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSaveTeamLeader}
+                  >
+                    Confirm & Assign
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

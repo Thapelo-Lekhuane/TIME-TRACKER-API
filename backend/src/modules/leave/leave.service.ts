@@ -298,29 +298,42 @@ export class LeaveService {
     return savedRequest;
   }
 
+  /** Map leave request to plain object to avoid circular JSON */
+  private toLeaveRequestResponse(lr: LeaveRequest) {
+    return {
+      id: lr.id,
+      user: lr.user ? { id: lr.user.id, fullName: lr.user.fullName } : undefined,
+      campaign: lr.campaign ? { id: lr.campaign.id, name: lr.campaign.name } : undefined,
+      leaveType: lr.leaveType ? { id: lr.leaveType.id, name: lr.leaveType.name } : undefined,
+      startUtc: lr.startUtc,
+      endUtc: lr.endUtc,
+      status: lr.status,
+      approvedBy: lr.approvedBy ? { id: lr.approvedBy.id, fullName: lr.approvedBy.fullName } : undefined,
+      approvedAt: lr.approvedAt,
+      reason: lr.reason,
+    };
+  }
+
   // Get leave requests for a specific user (their own requests)
   async findMyLeaveRequests(userId: string) {
-    return this.leaveRequestRepo.find({
+    const list = await this.leaveRequestRepo.find({
       where: { user: { id: userId } },
-      relations: ['leaveType', 'campaign', 'approvedBy'],
+      relations: ['user', 'leaveType', 'campaign', 'approvedBy'],
       order: { startUtc: 'DESC' },
     });
+    return list.map((lr) => this.toLeaveRequestResponse(lr));
   }
 
   async findLeaveRequests(query: { campaignId?: string; userId?: string; status?: LeaveStatus; from?: string; to?: string }, user: any) {
-    const where: any = {};
-    if (query.campaignId) where.campaign = { id: query.campaignId };
-    if (query.userId) where.user = { id: query.userId };
-    if (query.status) where.status = query.status;
+    let campaignIdFilter: string | null = query.campaignId || null;
 
     if (user.role === Role.MANAGER) {
-      // Managers see only their campaign
       const userEntity = await this.userRepo.findOne({
         where: { id: user.userId },
         relations: ['campaign'],
       });
       if (userEntity?.campaign) {
-        where.campaign = { id: userEntity.campaign.id };
+        campaignIdFilter = userEntity.campaign.id;
       } else {
         return [];
       }
@@ -330,8 +343,17 @@ export class LeaveService {
       .createQueryBuilder('leaveRequest')
       .leftJoinAndSelect('leaveRequest.user', 'user')
       .leftJoinAndSelect('leaveRequest.campaign', 'campaign')
-      .leftJoinAndSelect('leaveRequest.leaveType', 'leaveType')
-      .where(where);
+      .leftJoinAndSelect('leaveRequest.leaveType', 'leaveType');
+
+    if (campaignIdFilter) {
+      queryBuilder.andWhere('leaveRequest.campaignId = :campaignId', { campaignId: campaignIdFilter });
+    }
+    if (query.userId) {
+      queryBuilder.andWhere('leaveRequest.userId = :userId', { userId: query.userId });
+    }
+    if (query.status) {
+      queryBuilder.andWhere('leaveRequest.status = :status', { status: query.status });
+    }
 
     if (query.from || query.to) {
       if (query.from && query.to) {
@@ -350,7 +372,8 @@ export class LeaveService {
       }
     }
 
-    return queryBuilder.orderBy('leaveRequest.startUtc', 'DESC').getMany();
+    const list = await queryBuilder.orderBy('leaveRequest.startUtc', 'DESC').getMany();
+    return list.map((lr) => this.toLeaveRequestResponse(lr));
   }
 
   async updateLeaveRequestStatus(id: string, body: { status: LeaveStatus; reason?: string }, approverId: string) {

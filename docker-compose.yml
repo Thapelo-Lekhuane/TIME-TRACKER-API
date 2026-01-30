@@ -1,0 +1,54 @@
+# Time Tracker API - Docker Compose for deployment
+# Usage: docker compose up -d
+# Ensure backend/.env is set (or use env_file / environment below).
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: time-tracker-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # DATABASE_URL, JWT_*, SMTP_*, etc. come from backend/.env
+    ports:
+      - "3000:3000"
+    # If using local Postgres instead of Neon, uncomment:
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: time-tracker-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+  # Optional: local PostgreSQL (skip if using Neon/external DB)
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: time-tracker-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: timetracker
+  #     POSTGRES_PASSWORD: changeme
+  #     POSTGRES_DB: timetracker
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U timetracker"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
+
+# volumes:
+#   postgres_data:

@@ -114,6 +114,67 @@ export class ReportsService {
     };
   }
 
+  async getWeeklyTeamAttendance(weekStart: string, campaignId: string | undefined, user: any) {
+    // Calculate week end date (7 days from start)
+    const startDate = new Date(weekStart);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 6); // Week is 7 days (0-6)
+    
+    const weekEnd = endDate.toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0]; // Current date for comparison
+    
+    // Use existing getAttendanceRange method
+    const rangeData = await this.getAttendanceRange(weekStart, weekEnd, campaignId, user);
+    
+    // Calculate total hours for each user, excluding future days
+    const rowsWithTotals = rangeData.rows.map((row: any) => {
+      let totalWorkMinutes = 0;
+      let totalWorkHours = 0;
+      
+      // Sum up work minutes from all days in the week (only past and current days)
+      for (const date of rangeData.columns.slice(3)) { // Skip Agent Name, Team Leader, Campaign columns
+        // Only count hours for dates that have passed (not future dates)
+        if (date <= today && row[date] && row[date].workMinutes) {
+          totalWorkMinutes += row[date].workMinutes || 0;
+        }
+      }
+      
+      totalWorkHours = parseFloat((totalWorkMinutes / 60).toFixed(2));
+      
+      // Create new row with blanks for future days
+      const newRow: any = {
+        agentName: row.agentName,
+        teamLeader: row.teamLeader,
+        campaign: row.campaign,
+      };
+      
+      // Copy date data, but leave future dates blank
+      for (const date of rangeData.columns.slice(3)) {
+        if (date > today) {
+          // Future date - leave blank
+          newRow[date] = null;
+        } else {
+          // Past or current date - include data
+          newRow[date] = row[date];
+        }
+      }
+      
+      return {
+        ...newRow,
+        totalWorkHours,
+        totalWorkMinutes,
+      };
+    });
+    
+    return {
+      ...rangeData,
+      rows: rowsWithTotals,
+      weekStart,
+      weekEnd,
+      today, // Include today for frontend reference
+    };
+  }
+
   async getAttendanceRange(from: string, to: string, campaignId: string | undefined, user: any) {
     // Validate date formats first
     if (!from || !to) {
@@ -203,11 +264,20 @@ export class ReportsService {
         const status = this.getStatusForDate(u, d, userTimeEvents, userLeaveRequests);
         const { workMinutes, breakMinutes } = this.calculateMinutesForDate(u, d, userTimeEvents);
         const workHours = (workMinutes / 60).toFixed(2);
+        
+        // Get late minutes for this date (from work start event)
+        const workStartEvent = userTimeEvents.find(te => 
+          te.eventType.name.includes('Work Start') && 
+          te.timestampUtc.toISOString().startsWith(d)
+        );
+        const lateMinutes = workStartEvent?.lateMinutes || null;
+        
         row[d] = {
           status,
           workHours: parseFloat(workHours),
           workMinutes,
           breakMinutes,
+          lateMinutes,
         };
       }
       return row;
@@ -348,44 +418,100 @@ export class ReportsService {
 
   async exportAttendanceDaily(date: string, campaignId: string | undefined, user: any): Promise<string> {
     const data = await this.getAttendanceDaily(date, campaignId, user);
+    // Sort rows by campaign to group them
+    const sortedRows = [...data.rows].sort((a, b) => {
+      const campaignA = a.campaign || 'ZZZ';
+      const campaignB = b.campaign || 'ZZZ';
+      return campaignA.localeCompare(campaignB);
+    });
+    
     // Convert to CSV matching Excel format
     let csv = data.columns.join(',') + ',Hours Worked\n';
-    for (const row of data.rows) {
+    let currentCampaign = '';
+    let totalHours = 0;
+    
+    for (const row of sortedRows) {
       const dateData = row[date] as { status: string; workHours: number; workMinutes: number; breakMinutes: number };
-      csv += `"${row.agentName}","${row.teamLeader}","${row.campaign}","${dateData.status}","${dateData.workHours}"\n`;
+      const hours = dateData?.workHours || 0;
+      totalHours += hours;
+      
+      // Add separator line when campaign changes
+      if (currentCampaign && currentCampaign !== row.campaign) {
+        csv += '\n'; // Empty line separator
+      }
+      currentCampaign = row.campaign || '';
+      
+      csv += `"${row.agentName}","${row.teamLeader}","${row.campaign}","${dateData?.status || 'Absent'}","${hours}"\n`;
     }
+    
+    // Add total row
+    csv += `\n"TOTAL HOURS","","","","${totalHours.toFixed(2)}"\n`;
+    
     return csv;
   }
 
   async exportAttendanceRange(from: string, to: string, campaignId: string | undefined, user: any): Promise<string> {
     const data = await this.getAttendanceRange(from, to, campaignId, user);
+    // Sort rows by campaign to group them
+    const sortedRows = [...data.rows].sort((a, b) => {
+      const campaignA = a.campaign || 'ZZZ';
+      const campaignB = b.campaign || 'ZZZ';
+      return campaignA.localeCompare(campaignB);
+    });
+    
     // CSV matching Excel format with date columns
     const dateColumns = data.columns.slice(3); // Skip Agent Name, Team Leader, Campaign
     let csv = data.columns.join(',');
     // Add Hours Worked column for each date
     const headerDates = dateColumns.map(d => `Hours (${d})`).join(',');
-    csv += ',' + headerDates + '\n';
+    csv += ',' + headerDates + ',Total Hours\n';
     
-    for (const row of data.rows) {
+    let currentCampaign = '';
+    let grandTotalHours = 0;
+    const dateTotals: { [key: string]: number } = {};
+    dateColumns.forEach(d => dateTotals[d] = 0);
+    
+    for (const row of sortedRows) {
+      // Add separator line when campaign changes
+      if (currentCampaign && currentCampaign !== row.campaign) {
+        csv += '\n'; // Empty line separator
+      }
+      currentCampaign = row.campaign || '';
+      
       const values = [
         `"${row.agentName}"`,
         `"${row.teamLeader}"`,
         `"${row.campaign}"`,
       ];
       
+      let rowTotalHours = 0;
       for (const date of dateColumns) {
         const dateData = row[date] as { status: string; workHours: number; workMinutes: number; breakMinutes: number };
-        values.push(`"${dateData.status}"`);
+        values.push(`"${dateData?.status || 'Absent'}"`);
       }
       
       // Add hours worked for each date
       for (const date of dateColumns) {
         const dateData = row[date] as { status: string; workHours: number; workMinutes: number; breakMinutes: number };
-        values.push(`"${dateData.workHours}"`);
+        const hours = dateData?.workHours || 0;
+        values.push(`"${hours.toFixed(2)}"`);
+        rowTotalHours += hours;
+        dateTotals[date] = (dateTotals[date] || 0) + hours;
       }
+      
+      values.push(`"${rowTotalHours.toFixed(2)}"`);
+      grandTotalHours += rowTotalHours;
       
       csv += values.join(',') + '\n';
     }
+    
+    // Add totals row
+    const totalValues = ['"TOTAL HOURS"', '""', '""'];
+    dateColumns.forEach(() => totalValues.push('""')); // Status columns
+    dateColumns.forEach(d => totalValues.push(`"${dateTotals[d].toFixed(2)}"`));
+    totalValues.push(`"${grandTotalHours.toFixed(2)}"`);
+    csv += '\n' + totalValues.join(',') + '\n';
+    
     return csv;
   }
 
@@ -429,10 +555,23 @@ export class ReportsService {
   }
 
   private getStatusForDate(user: User, date: string, timeEvents: TimeEvent[], leaveRequests: LeaveRequest[]): string {
-    const leave = leaveRequests.find(lr => lr.user.id === user.id && lr.startUtc <= new Date(date + 'T23:59:59Z') && lr.endUtc >= new Date(date + 'T00:00:00Z'));
+    // Check for approved leave first
+    const leave = leaveRequests.find(lr => 
+      lr.user.id === user.id && 
+      lr.status === 'APPROVED' &&
+      lr.startUtc <= new Date(date + 'T23:59:59Z') && 
+      lr.endUtc >= new Date(date + 'T00:00:00Z')
+    );
     if (leave) return leave.leaveType.name;
-    const events = timeEvents.filter(te => te.user.id === user.id);
-    if (events.length > 0) return 'Present';
+    
+    // Check for "Work Start" event - user must have clocked in to be marked as Present
+    const userEvents = timeEvents.filter(te => te.user.id === user.id);
+    const hasWorkStart = userEvents.some(te => 
+      te.eventType.name.includes('Work Start') && 
+      te.timestampUtc.toISOString().startsWith(date)
+    );
+    
+    if (hasWorkStart) return 'Present';
     return 'Absent';
   }
 
@@ -445,9 +584,9 @@ export class ReportsService {
     let workMinutes = 0;
     let breakMinutes = 0;
     for (const event of events.sort((a, b) => a.timestampUtc.getTime() - b.timestampUtc.getTime())) {
-      if (event.eventType.name === 'Start Work') {
+      if (event.eventType?.name?.includes?.('Work Start')) {
         workStart = event.timestampUtc;
-      } else if (event.eventType.name === 'End Work' && workStart) {
+      } else if (event.eventType?.name?.includes?.('Work End') && workStart) {
         workMinutes += (event.timestampUtc.getTime() - workStart.getTime()) / 60000;
         workStart = null;
       } else if (event.eventType.isBreak && !breakStart) {

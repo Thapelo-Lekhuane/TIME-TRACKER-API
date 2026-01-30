@@ -44,6 +44,14 @@ export class ReportsController {
     return this.reportsService.getAttendanceRange(query.from, query.to, query.campaignId, req.user);
   }
 
+  @Get('attendance/weekly')
+  @Roles(Role.MANAGER, Role.ADMIN)
+  @ApiOperation({ summary: 'Weekly team attendance report with total hours' })
+  @ApiOkResponse({ type: Object })
+  async getWeeklyTeamAttendance(@Query() query: { weekStart: string; campaignId?: string }, @Req() req: any) {
+    return this.reportsService.getWeeklyTeamAttendance(query.weekStart, query.campaignId, req.user);
+  }
+
   @Get('too-weekly')
   @Roles(Role.MANAGER, Role.ADMIN)
   @ApiOperation({ summary: 'TOO Weekly report' })

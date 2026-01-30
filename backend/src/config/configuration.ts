@@ -12,6 +12,7 @@ const configuration = () => ({
     password: process.env.ADMIN_PASSWORD,
     timeZone: process.env.ADMIN_TIMEZONE ?? 'Africa/Johannesburg',
   },
+  escalatedLateEmail: process.env.ESCALATED_LATE_EMAIL ?? null,
 });
 
 export default configuration;

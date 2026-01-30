@@ -41,6 +41,7 @@ export interface CampaignAssignmentEmailData {
   teamLeadEmail?: string;
   managerName?: string;
   managerEmail?: string;
+  eventTypes?: Array<{ name: string; category: string; isBreak: boolean }>;
 }
 
 export interface LateArrivalEmailData {
@@ -52,6 +53,34 @@ export interface LateArrivalEmailData {
   isEscalation: boolean;
 }
 
+export interface TeamLeaderPromotionEmailData {
+  toEmail: string;
+  employeeName: string;
+  teamLeaderName?: string;
+  teamLeaderEmail?: string;
+  campaignName?: string;
+  campaignDescription?: string;
+  promotedByName: string;
+  responsibilities?: string[];
+}
+
+export interface TeamMemberAssignmentEmailData {
+  toEmail: string;
+  employeeName: string;
+  teamLeaderName: string;
+  teamLeaderEmail: string;
+  campaignName?: string;
+  assignedByName: string;
+}
+
+export interface TeamLeaderAssignmentEmailData {
+  toEmail: string;
+  teamLeaderName: string;
+  employeeNames: string[];
+  campaignName?: string;
+  assignedByName: string;
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -59,6 +88,33 @@ export class EmailService {
 
   constructor(private readonly configService: ConfigService) {
     this.initializeTransporter();
+  }
+
+  /** Shared email wrapper: header + content + footer */
+  private emailWrapper(title: string, content: string, accentColor = '#2563eb'): string {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+</head>
+<body style="margin:0; padding:0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f1f5f9; line-height: 1.6;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 24px 16px;">
+    <div style="background: linear-gradient(135deg, ${accentColor} 0%, #1d4ed8 100%); color: white; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600;">TimeTrack</h1>
+      <p style="margin: 8px 0 0; font-size: 14px; opacity: 0.95;">${title}</p>
+    </div>
+    <div style="background: #ffffff; padding: 28px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+      ${content}
+    </div>
+    <div style="text-align: center; padding: 20px; color: #64748b; font-size: 12px;">
+      This is an automated message from TimeTrack Workforce Attendance System.
+    </div>
+  </div>
+</body>
+</html>`;
   }
 
   private initializeTransporter() {
@@ -71,13 +127,20 @@ export class EmailService {
       this.transporter = nodemailer.createTransport({
         host,
         port,
-        secure: port === 465,
+        secure: port === 465, // true for 465, false for other ports
         auth: {
           user,
           pass,
         },
+        // For Gmail and other providers using port 587, require TLS
+        ...(port === 587 && {
+          requireTLS: true,
+          tls: {
+            rejectUnauthorized: false, // Allow self-signed certificates if needed
+          },
+        }),
       });
-      this.logger.log('Email transporter initialized successfully');
+      this.logger.log(`Email transporter initialized successfully (${host}:${port})`);
     } else {
       this.logger.warn('SMTP configuration not found. Email notifications will be logged only.');
     }
@@ -174,7 +237,7 @@ Please review this leave request in the TimeTrack system.
 
     if (this.transporter) {
       try {
-        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER');
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
         await this.transporter.sendMail({
           from: `"TimeTrack System" <${fromEmail}>`,
           to: data.toEmail,
@@ -203,6 +266,18 @@ Please review this leave request in the TimeTrack system.
     }
   }
 
+  /** Format time string (e.g. "09:00:00" or "09:00") to readable format */
+  private formatTime(timeStr: string | null | undefined): string {
+    if (!timeStr) return 'N/A';
+    const parts = timeStr.trim().split(':');
+    const h = parseInt(parts[0] || '0', 10);
+    const m = parseInt(parts[1] || '0', 10);
+    if (isNaN(h) || isNaN(m)) return timeStr;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
+  }
+
   async sendCampaignAssignmentNotification(data: CampaignAssignmentEmailData): Promise<boolean> {
     const subject = `You have been assigned to campaign: ${data.campaignName}`;
     
@@ -212,7 +287,7 @@ Please review this leave request in the TimeTrack system.
       scheduleSection += `
             <tr>
               <td style="padding: 8px 0; font-weight: bold; color: #4b5563;">Work Hours:</td>
-              <td style="padding: 8px 0;">${data.workDayStart || 'N/A'} - ${data.workDayEnd || 'N/A'}</td>
+              <td style="padding: 8px 0;">${this.formatTime(data.workDayStart)} - ${this.formatTime(data.workDayEnd)}</td>
             </tr>
       `;
     }
@@ -221,14 +296,14 @@ Please review this leave request in the TimeTrack system.
       scheduleSection += `
             <tr>
               <td style="padding: 8px 0; font-weight: bold; color: #4b5563;">Lunch Break:</td>
-              <td style="padding: 8px 0;">${data.lunchStart || 'N/A'} - ${data.lunchEnd || 'N/A'}</td>
+              <td style="padding: 8px 0;">${this.formatTime(data.lunchStart)} - ${this.formatTime(data.lunchEnd)}</td>
             </tr>
       `;
     }
     
     if (data.teaBreaks && data.teaBreaks.length > 0) {
       const teaBreaksText = data.teaBreaks.map((tb, idx) => 
-        `Tea Break ${idx + 1}: ${tb.start} - ${tb.end}`
+        `Tea Break ${idx + 1}: ${this.formatTime(tb.start)} - ${this.formatTime(tb.end)}`
       ).join('<br>');
       scheduleSection += `
             <tr>
@@ -304,6 +379,20 @@ Please review this leave request in the TimeTrack system.
         </div>
         ` : ''}
         
+        ${data.eventTypes && data.eventTypes.length > 0 ? `
+        <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="color: #2563eb; margin-top: 0;">Available Clock Actions</h3>
+          <p style="color: #4b5563; margin-bottom: 12px;">You can use the following actions in the TimeTrack system:</p>
+          <ul style="margin: 0; padding-left: 20px; color: #4b5563;">
+            ${data.eventTypes.map(et => `
+              <li style="margin: 6px 0;">
+                <strong>${et.name}</strong>${et.isBreak ? ' (Break)' : ''} - ${et.category}
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+        ` : ''}
+        
         <p style="color: #059669; font-weight: 500;">
           You can now clock in/out and apply for leave through the TimeTrack system.
         </p>
@@ -319,15 +408,15 @@ Please review this leave request in the TimeTrack system.
     // Build text version
     let textSchedule = '';
     if (data.workDayStart || data.workDayEnd) {
-      textSchedule += `Work Hours: ${data.workDayStart || 'N/A'} - ${data.workDayEnd || 'N/A'}\n`;
+      textSchedule += `Work Hours: ${this.formatTime(data.workDayStart)} - ${this.formatTime(data.workDayEnd)}\n`;
     }
     if (data.lunchStart || data.lunchEnd) {
-      textSchedule += `Lunch Break: ${data.lunchStart || 'N/A'} - ${data.lunchEnd || 'N/A'}\n`;
+      textSchedule += `Lunch Break: ${this.formatTime(data.lunchStart)} - ${this.formatTime(data.lunchEnd)}\n`;
     }
     if (data.teaBreaks && data.teaBreaks.length > 0) {
       textSchedule += 'Tea Breaks:\n';
       data.teaBreaks.forEach((tb, idx) => {
-        textSchedule += `  Tea Break ${idx + 1}: ${tb.start} - ${tb.end}\n`;
+        textSchedule += `  Tea Break ${idx + 1}: ${this.formatTime(tb.start)} - ${this.formatTime(tb.end)}\n`;
       });
     }
     
@@ -348,13 +437,13 @@ You have been assigned to a new campaign in the TimeTrack system.
 
 Campaign Name: ${data.campaignName}
 ${data.campaignDescription ? `Description: ${data.campaignDescription}\n` : ''}Assigned By: ${data.assignedByName}
-${textSchedule ? `\nWork Schedule:\n${textSchedule}` : ''}${textTeam ? `\nTeam Information:\n${textTeam}` : ''}
+${textSchedule ? `\nWork Schedule:\n${textSchedule}` : ''}${textTeam ? `\nTeam Information:\n${textTeam}` : ''}${data.eventTypes && data.eventTypes.length > 0 ? `\nAvailable Clock Actions:\n${data.eventTypes.map(et => `  - ${et.name}${et.isBreak ? ' (Break)' : ''} - ${et.category}`).join('\n')}\n` : ''}
 You can now clock in/out and apply for leave through the TimeTrack system.
     `;
 
     if (this.transporter) {
       try {
-        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER');
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
         await this.transporter.sendMail({
           from: `"TimeTrack System" <${fromEmail}>`,
           to: data.toEmail,
@@ -448,7 +537,7 @@ This is an automated confirmation from TimeTrack Workforce Attendance System.
 
     if (this.transporter) {
       try {
-        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER');
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
         await this.transporter.sendMail({
           from: `"TimeTrack System" <${fromEmail}>`,
           to: data.toEmail,
@@ -477,51 +566,30 @@ This is an automated confirmation from TimeTrack Workforce Attendance System.
 
   async sendLateArrivalNotification(data: LateArrivalEmailData): Promise<boolean> {
     const subject = data.isEscalation
-      ? `URGENT: Employee ${data.employeeName} is ${data.lateMinutes} minutes late`
-      : `Employee ${data.employeeName} is ${data.lateMinutes} minutes late`;
+      ? `URGENT: Late arrival escalation – ${data.employeeName} (${data.lateMinutes} min)`
+      : `Late arrival – ${data.employeeName} (${data.lateMinutes} min)`;
 
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background-color: ${data.isEscalation ? '#dc2626' : '#f59e0b'}; color: white; padding: 20px; text-align: center; }
-          .content { padding: 20px; background-color: #f9fafb; }
-          .info-row { margin: 10px 0; }
-          .label { font-weight: bold; color: #4b5563; }
-          .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h2>${data.isEscalation ? '⚠️ Late Arrival Escalation' : '⏰ Late Arrival Notification'}</h2>
-          </div>
-          <div class="content">
-            <p>${data.isEscalation ? 'This is an escalation notification.' : 'An employee has not clocked in on time.'}</p>
-            <div class="info-row">
-              <span class="label">Employee:</span> ${data.employeeName} (${data.employeeEmail})
-            </div>
-            <div class="info-row">
-              <span class="label">Campaign:</span> ${data.campaignName}
-            </div>
-            <div class="info-row">
-              <span class="label">Minutes Late:</span> <strong style="color: ${data.isEscalation ? '#dc2626' : '#f59e0b'};">${data.lateMinutes} minutes</strong>
-            </div>
-            <div class="info-row">
-              <span class="label">Time:</span> ${new Date().toLocaleString()}
-            </div>
-            ${data.isEscalation ? '<p style="color: #dc2626; font-weight: bold;">This employee has been late for more than 30 minutes. Immediate action may be required.</p>' : ''}
-          </div>
-          <div class="footer">
-            <p>This is an automated notification from Time Tracker System</p>
-          </div>
-        </div>
-      </body>
-      </html>
+    const accent = data.isEscalation ? '#dc2626' : '#f59e0b';
+    const content = `
+      <p style="margin: 0 0 20px; color: #334155; font-size: 15px;">
+        ${data.isEscalation
+          ? 'An employee has not clocked in and is <strong>30+ minutes late</strong>. This is an escalation requiring attention.'
+          : 'An employee has not clocked in on time.'}
+      </p>
+      <table style="width: 100%; border-collapse: collapse; background: #f8fafc; border-radius: 8px; overflow: hidden;">
+        <tr><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #475569; width: 140px;">Employee</td><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0;">${data.employeeName}</td></tr>
+        <tr><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #475569;">Email</td><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0;">${data.employeeEmail}</td></tr>
+        <tr><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #475569;">Campaign</td><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0;">${data.campaignName}</td></tr>
+        <tr><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #475569;">Minutes late</td><td style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0;"><strong style="color: ${accent};">${data.lateMinutes} min</strong></td></tr>
+        <tr><td style="padding: 12px 16px; font-weight: 600; color: #475569;">Time</td><td style="padding: 12px 16px;">${new Date().toLocaleString()}</td></tr>
+      </table>
+      ${data.isEscalation ? `<p style="margin: 20px 0 0; padding: 12px; background: #fef2f2; border-left: 4px solid #dc2626; border-radius: 4px; color: #991b1b; font-weight: 500;">Immediate action may be required. Please follow up with the employee and team leader.</p>` : ''}
     `;
+    const html = this.emailWrapper(
+      data.isEscalation ? 'Late arrival escalation' : 'Late arrival notification',
+      content,
+      accent
+    );
 
     const text = `
 ${data.isEscalation ? 'URGENT: Late Arrival Escalation' : 'Late Arrival Notification'}
@@ -561,6 +629,230 @@ This is an automated notification from Time Tracker System
       this.logger.log(`Late Arrival: ${data.employeeName} - ${data.lateMinutes} minutes late`);
       this.logger.log(`Campaign: ${data.campaignName}`);
       this.logger.log(`Escalation: ${data.isEscalation}`);
+      this.logger.log('==============================================================');
+      return true;
+    }
+  }
+
+  async sendTeamLeaderPromotionNotification(data: TeamLeaderPromotionEmailData): Promise<boolean> {
+    const subject = data.campaignName 
+      ? `You’re a Team Leader: ${data.campaignName}`
+      : `Team Leader promotion: ${data.employeeName}`;
+    
+    const responsibilities = data.responsibilities || [
+      'Monitor team attendance and punctuality',
+      'Receive late arrival notifications (15+ minutes)',
+      'Escalate critical attendance issues to management',
+      'Support team members with time tracking questions',
+    ];
+    
+    const content = `
+      <p style="margin: 0 0 20px; color: #334155; font-size: 15px;">Hello <strong>${data.employeeName}</strong>,</p>
+      <p style="margin: 0 0 24px; color: #334155;">Congratulations — you have been assigned as Team Leader${data.campaignName ? ` for <strong style="color: #2563eb;">${data.campaignName}</strong>` : ''}.</p>
+      ${data.campaignName ? `
+      <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+        <p style="margin: 0 0 4px; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Campaign</p>
+        <p style="margin: 0; font-size: 16px; font-weight: 600; color: #1e293b;">${data.campaignName}</p>
+        ${data.campaignDescription ? `<p style="margin: 8px 0 0; font-size: 14px; color: #64748b;">${data.campaignDescription}</p>` : ''}
+      </div>
+      ` : ''}
+      <div style="background: #eff6ff; border-radius: 8px; padding: 16px; margin-bottom: 20px; border-left: 4px solid #2563eb;">
+        <p style="margin: 0 0 12px; font-weight: 600; color: #1e40af;">Your responsibilities</p>
+        <ul style="margin: 0; padding-left: 20px; color: #334155;">
+          ${responsibilities.map(resp => `<li style="margin: 6px 0;">${resp}</li>`).join('')}
+        </ul>
+      </div>
+      <p style="margin: 0; color: #64748b; font-size: 14px;">Promoted by: <strong>${data.promotedByName}</strong></p>
+    `;
+    const html = this.emailWrapper('Team Leader assignment', content);
+
+    let textTeamLeader = '';
+    if (data.teamLeaderName || data.teamLeaderEmail) {
+      textTeamLeader = `Your Team Leader: ${data.teamLeaderName || ''}${data.teamLeaderEmail ? ` (${data.teamLeaderEmail})` : ''}\n`;
+    }
+
+    const text = `
+Team Leader Promotion
+
+Hello ${data.employeeName},
+
+Congratulations! You have been promoted to Team Leader${data.campaignName ? ` for the campaign: ${data.campaignName}` : ''}.
+
+${data.campaignName ? `Campaign Name: ${data.campaignName}\n${data.campaignDescription ? `Description: ${data.campaignDescription}\n` : ''}` : ''}Your Responsibilities:
+${responsibilities.map(resp => `  - ${resp}`).join('\n')}
+
+${textTeamLeader}What This Means:
+As a Team Leader, you will receive automated notifications when team members are late or have attendance issues. 
+You can access the Manager Dashboard in TimeTrack to view team attendance reports and manage leave requests.
+
+Promoted By: ${data.promotedByName}
+
+This is an automated notification from TimeTrack Workforce Attendance System.
+    `;
+
+    if (this.transporter) {
+      try {
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
+        await this.transporter.sendMail({
+          from: `"TimeTrack System" <${fromEmail}>`,
+          to: data.toEmail,
+          subject,
+          text,
+          html,
+        });
+        this.logger.log(`Team leader promotion notification sent to ${data.toEmail}`);
+        return true;
+      } catch (error) {
+        this.logger.error(`Failed to send team leader promotion email to ${data.toEmail}:`, error);
+        return false;
+      }
+    } else {
+      this.logger.log('========== EMAIL NOTIFICATION (SMTP not configured) ==========');
+      this.logger.log(`To: ${data.toEmail}`);
+      this.logger.log(`Subject: ${subject}`);
+      this.logger.log(`Team Leader Promotion: ${data.employeeName}${data.campaignName ? ` -> ${data.campaignName}` : ''}`);
+      this.logger.log(`Promoted By: ${data.promotedByName}`);
+      this.logger.log('==============================================================');
+      return true;
+    }
+  }
+
+  async sendTeamMemberAssignmentNotification(data: TeamMemberAssignmentEmailData): Promise<boolean> {
+    const subject = `Your team leader: ${data.teamLeaderName}`;
+    
+    const content = `
+      <p style="margin: 0 0 20px; color: #334155; font-size: 15px;">Hello <strong>${data.employeeName}</strong>,</p>
+      <p style="margin: 0 0 24px; color: #334155;">You have been assigned to a team leader for your campaign${data.campaignName ? `: <strong style="color: #2563eb;">${data.campaignName}</strong>` : ''}.</p>
+      <div style="background: #eff6ff; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 4px solid #2563eb;">
+        <p style="margin: 0 0 12px; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Your team leader</p>
+        <p style="margin: 0 0 4px; font-size: 18px; font-weight: 600; color: #1e40af;">${data.teamLeaderName}</p>
+        <p style="margin: 0; font-size: 14px; color: #64748b;">${data.teamLeaderEmail}</p>
+      </div>
+      ${data.campaignName ? `<p style="margin: 0 0 16px; color: #64748b; font-size: 14px;">Campaign: <strong>${data.campaignName}</strong></p>` : ''}
+      <p style="margin: 0 0 8px; color: #334155; font-size: 14px;">Your team leader will monitor attendance and can help with time tracking or leave. They receive notifications if you are late.</p>
+      <p style="margin: 20px 0 0; color: #64748b; font-size: 14px;">Assigned by: <strong>${data.assignedByName}</strong></p>
+    `;
+    const html = this.emailWrapper('Team leader assignment', content);
+
+    const text = `
+Team Leader Assignment
+
+Hello ${data.employeeName},
+
+You have been assigned to a team leader for your campaign${data.campaignName ? `: ${data.campaignName}` : ''}.
+
+Your Team Leader:
+Name: ${data.teamLeaderName}
+Email: ${data.teamLeaderEmail}
+
+${data.campaignName ? `Campaign: ${data.campaignName}\n` : ''}What This Means:
+Your team leader will monitor your attendance and can help you with any questions about time tracking or leave requests. 
+They will receive notifications if you are late or have attendance issues.
+
+Assigned By: ${data.assignedByName}
+
+This is an automated notification from TimeTrack Workforce Attendance System.
+    `;
+
+    if (this.transporter) {
+      try {
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
+        await this.transporter.sendMail({
+          from: `"TimeTrack System" <${fromEmail}>`,
+          to: data.toEmail,
+          subject,
+          text,
+          html,
+        });
+        this.logger.log(`Team member assignment notification sent to ${data.toEmail}`);
+        return true;
+      } catch (error) {
+        this.logger.error(`Failed to send team member assignment email to ${data.toEmail}:`, error);
+        return false;
+      }
+    } else {
+      this.logger.log('========== EMAIL NOTIFICATION (SMTP not configured) ==========');
+      this.logger.log(`To: ${data.toEmail}`);
+      this.logger.log(`Subject: ${subject}`);
+      this.logger.log(`Team Member Assignment: ${data.employeeName} -> Team Leader: ${data.teamLeaderName}`);
+      this.logger.log(`Assigned By: ${data.assignedByName}`);
+      this.logger.log('==============================================================');
+      return true;
+    }
+  }
+
+  async sendTeamLeaderAssignmentNotification(data: TeamLeaderAssignmentEmailData): Promise<boolean> {
+    const subject = `${data.employeeNames.length} team member(s) assigned to you – ${data.campaignName || 'TimeTrack'}`;
+    
+    const employeeList = data.employeeNames.map(name => `<li style="margin: 8px 0;">${name}</li>`).join('');
+    
+    const content = `
+      <p style="margin: 0 0 20px; color: #334155; font-size: 15px;">Hello <strong>${data.teamLeaderName}</strong>,</p>
+      <p style="margin: 0 0 24px; color: #334155;">You have been assigned <strong>${data.employeeNames.length} team member(s)</strong>${data.campaignName ? ` for <strong style="color: #2563eb;">${data.campaignName}</strong>` : ''}.</p>
+      <div style="background: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+        <p style="margin: 0 0 12px; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Your team members</p>
+        <ul style="margin: 0; padding-left: 20px; color: #334155;">
+          ${employeeList}
+        </ul>
+      </div>
+      ${data.campaignName ? `<p style="margin: 0 0 16px; color: #64748b; font-size: 14px;">Campaign: <strong>${data.campaignName}</strong></p>` : ''}
+      <div style="background: #f0fdf4; border-radius: 8px; padding: 16px; margin-bottom: 16px; border-left: 4px solid #059669;">
+        <p style="margin: 0 0 8px; font-weight: 600; color: #047857;">Your responsibilities</p>
+        <ul style="margin: 0; padding-left: 20px; color: #334155; font-size: 14px;">
+          <li style="margin: 4px 0;">Monitor team attendance and punctuality</li>
+          <li style="margin: 4px 0;">Receive late arrival notifications (15+ minutes)</li>
+          <li style="margin: 4px 0;">Escalate critical attendance issues to management</li>
+          <li style="margin: 4px 0;">Support team members with time tracking questions</li>
+        </ul>
+      </div>
+      <p style="margin: 0; color: #64748b; font-size: 14px;">Assigned by: <strong>${data.assignedByName}</strong></p>
+    `;
+    const html = this.emailWrapper('New team members assigned', content);
+
+    const text = `
+New Team Members Assigned
+
+Hello ${data.teamLeaderName},
+
+You have been assigned ${data.employeeNames.length} new team member(s)${data.campaignName ? ` for the campaign: ${data.campaignName}` : ''}.
+
+Your Team Members:
+${data.employeeNames.map(name => `  - ${name}`).join('\n')}
+
+${data.campaignName ? `Campaign: ${data.campaignName}\n` : ''}Your Responsibilities:
+  - Monitor team attendance and punctuality
+  - Receive late arrival notifications (15+ minutes)
+  - Escalate critical attendance issues to management
+  - Support team members with time tracking questions
+
+Assigned By: ${data.assignedByName}
+
+This is an automated notification from TimeTrack Workforce Attendance System.
+    `;
+
+    if (this.transporter) {
+      try {
+        const fromEmail = this.configService.get<string>('SMTP_FROM') || this.configService.get<string>('SMTP_USER') || 'noreply@timetracker.com';
+        await this.transporter.sendMail({
+          from: `"TimeTrack System" <${fromEmail}>`,
+          to: data.toEmail,
+          subject,
+          text,
+          html,
+        });
+        this.logger.log(`Team leader assignment notification sent to ${data.toEmail}`);
+        return true;
+      } catch (error) {
+        this.logger.error(`Failed to send team leader assignment email to ${data.toEmail}:`, error);
+        return false;
+      }
+    } else {
+      this.logger.log('========== EMAIL NOTIFICATION (SMTP not configured) ==========');
+      this.logger.log(`To: ${data.toEmail}`);
+      this.logger.log(`Subject: ${subject}`);
+      this.logger.log(`Team Leader Assignment: ${data.teamLeaderName} -> ${data.employeeNames.length} team member(s)`);
+      this.logger.log(`Team Members: ${data.employeeNames.join(', ')}`);
+      this.logger.log(`Assigned By: ${data.assignedByName}`);
       this.logger.log('==============================================================');
       return true;
     }

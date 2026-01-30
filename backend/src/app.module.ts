@@ -13,6 +13,7 @@ import { TimeEventsModule } from './modules/time-events/time-events.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { TimesheetsModule } from './modules/timesheets/timesheets.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { SettingsModule } from './modules/settings/settings.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     LeaveModule,
     TimesheetsModule,
     ReportsModule,
+    SettingsModule,
   ],
 })
 export class AppModule {}

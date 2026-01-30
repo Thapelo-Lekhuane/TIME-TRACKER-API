@@ -53,7 +53,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MANAGER)
   @ApiOperation({ summary: 'Update user details (role, campaign, designation, etc.)' })
   @ApiOkResponse({ type: UserResponseDto })
   @ApiBody({
@@ -70,8 +70,17 @@ export class UsersController {
       },
     },
   })
-  async updateUser(@Param('id') id: string, @Body() body: any) {
-    return this.usersService.updateUser(id, body);
+  async updateUser(@Param('id') id: string, @Body() body: any, @Req() req: any) {
+    // Managers can only update teamLeaderId, not other fields
+    if (req.user.role === Role.MANAGER) {
+      const managerBody: any = {};
+      if (body.teamLeaderId !== undefined) {
+        managerBody.teamLeaderId = body.teamLeaderId;
+      }
+      return this.usersService.updateUser(id, managerBody, req.user.userId);
+    }
+    // Admins can update all fields
+    return this.usersService.updateUser(id, body, req.user.userId);
   }
 
   @Patch(':id/role')
@@ -80,5 +89,20 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateRole(@Param('id') id: string, @Body() body: { role: Role }) {
     return this.usersService.updateRole(id, body.role);
+  }
+
+  @Post('assign-team-leader')
+  @Roles(Role.ADMIN, Role.MANAGER)
+  @ApiOperation({ summary: 'Bulk assign team leader to all employees in a campaign' })
+  @ApiOkResponse({ type: Object })
+  async assignTeamLeaderToCampaign(
+    @Body() body: { campaignId: string; teamLeaderId: string },
+    @Req() req: any
+  ) {
+    return this.usersService.assignTeamLeaderToCampaign(
+      body.campaignId,
+      body.teamLeaderId,
+      req.user.userId
+    );
   }
 }

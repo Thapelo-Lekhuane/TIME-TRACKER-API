@@ -21,22 +21,55 @@ export class CampaignsService {
     private readonly eventTypesService: EventTypesService,
   ) {}
 
+  /** Map campaign entity to plain object to avoid circular JSON and sensitive user fields */
+  private toCampaignResponse(c: Campaign) {
+    return {
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      timeZone: c.timeZone ?? c.defaultTimeZone,
+      defaultTimeZone: c.defaultTimeZone ?? c.timeZone,
+      workDayStart: c.workDayStart,
+      workDayEnd: c.workDayEnd,
+      lunchStart: c.lunchStart,
+      lunchEnd: c.lunchEnd,
+      teaBreaks: c.teaBreaks,
+      leaveApproverEmail: c.leaveApproverEmail,
+      users: (c.users || []).map((u) => ({ id: u.id, fullName: u.fullName, email: u.email })),
+      teamLeaders: (c.teamLeaders || []).map((t) => ({ id: t.id, fullName: t.fullName, email: t.email })),
+    };
+  }
+
   async findAll(user: any) {
+    let list: Campaign[];
     if (user.role === Role.ADMIN) {
-      return this.repo.find({ relations: ['users'] });
+      list = await this.repo
+        .createQueryBuilder('campaign')
+        .leftJoinAndSelect('campaign.users', 'users')
+        .leftJoin('campaign.teamLeaders', 'teamLeaders')
+        .addSelect(['teamLeaders.id', 'teamLeaders.fullName', 'teamLeaders.email'])
+        .getMany();
     } else {
-      // Manager: all campaigns they can see (for now, all campaigns - can be restricted later)
-      return this.repo.find({ relations: ['users'] });
+      list = await this.repo
+        .createQueryBuilder('campaign')
+        .leftJoinAndSelect('campaign.users', 'users')
+        .leftJoin('campaign.teamLeaders', 'teamLeaders')
+        .addSelect(['teamLeaders.id', 'teamLeaders.fullName', 'teamLeaders.email'])
+        .getMany();
     }
+    return list.map((c) => this.toCampaignResponse(c));
   }
 
   async findById(id: string) {
-    const campaign = await this.repo.findOne({
-      where: { id },
-      relations: ['users'],
-    });
+    const campaign = await this.repo
+      .createQueryBuilder('campaign')
+      .leftJoinAndSelect('campaign.users', 'users')
+      .leftJoin('campaign.teamLeaders', 'teamLeaders')
+      .addSelect(['teamLeaders.id', 'teamLeaders.fullName', 'teamLeaders.email'])
+      .where('campaign.id = :id', { id })
+      .getOne();
     if (!campaign) throw new NotFoundException('Campaign not found');
-    return campaign;
+    return this.toCampaignResponse(campaign);
   }
 
   async create(dto: {
@@ -283,6 +316,16 @@ export class CampaignsService {
       // Get the first team lead (or manager if no specific team lead)
       const teamLead = teamLeads.length > 0 ? teamLeads[0] : manager;
 
+      // Fetch event types for this campaign (global + campaign-specific)
+      const eventTypes = await this.eventTypesService.findForUser(campaignId);
+      const eventTypesForEmail = eventTypes
+        .filter(et => et.active)
+        .map(et => ({
+          name: et.name,
+          category: et.category,
+          isBreak: et.isBreak,
+        }));
+
       for (const newUser of newlyAssignedUsers) {
         this.emailService.sendCampaignAssignmentNotification({
           toEmail: newUser.email,
@@ -299,6 +342,7 @@ export class CampaignsService {
           teamLeadEmail: teamLead?.email,
           managerName: manager?.fullName,
           managerEmail: manager?.email,
+          eventTypes: eventTypesForEmail,
         }).catch(err => {
           this.logger.error(`Failed to send campaign assignment email to ${newUser.email}`, err);
         });

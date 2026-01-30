@@ -103,6 +103,10 @@ const AdminDashboard = () => {
   const [assigningCampaign, setAssigningCampaign] = useState<Campaign | null>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
 
+  // System settings (escalated late email)
+  const [escalatedLateEmail, setEscalatedLateEmail] = useState('');
+  const [settingsSaving, setSettingsSaving] = useState(false);
+
   useEffect(() => {
     fetchUsers();
     fetchCampaigns();
@@ -110,6 +114,14 @@ const AdminDashboard = () => {
     fetchLeaveTypes();
     fetchAllLeaveBalances();
   }, []);
+
+  useEffect(() => {
+    if (currentSection === 'systemSettings') {
+      api.get('/settings/escalated-late-email')
+        .then((res) => setEscalatedLateEmail(res.data.escalatedLateEmail || ''))
+        .catch(() => setEscalatedLateEmail(''));
+    }
+  }, [currentSection]);
 
   const fetchUsers = async () => {
     try {
@@ -446,6 +458,13 @@ const AdminDashboard = () => {
               onClick={(e) => { e.preventDefault(); setCurrentSection('leaveEntitlements'); }}
             >
               Leave Entitlements
+            </a>
+            <a
+              href="#"
+              className={`sidebar-link ${currentSection === 'systemSettings' ? 'active' : ''}`}
+              onClick={(e) => { e.preventDefault(); setCurrentSection('systemSettings'); }}
+            >
+              System Settings
             </a>
             <a
               href="#"
@@ -867,6 +886,48 @@ SMTP_FROM=noreply@example.com`}
               <div style={{ marginTop: 'var(--spacing-lg)', backgroundColor: 'var(--card-light)', padding: 'var(--spacing-md)', borderRadius: 'var(--radius)' }}>
                 <h4>Quick Assign Leave Days</h4>
                 <p className="text-small">Use the button above to assign annual leave entitlements to employees. When leave is approved, the used days will automatically increase.</p>
+              </div>
+            </div>
+          )}
+          
+          {currentSection === 'systemSettings' && (
+            <div className="section">
+              <h2>System Settings</h2>
+              <p className="text-small">Configure system-wide notification and escalation settings</p>
+              
+              <div style={{ maxWidth: '500px', marginTop: 'var(--spacing-lg)' }}>
+                <div className="form-group">
+                  <label className="form-label">Escalated late coming notification email</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    placeholder="e.g. manager@company.com"
+                    value={escalatedLateEmail}
+                    onChange={(e) => setEscalatedLateEmail(e.target.value)}
+                  />
+                  <p className="text-small" style={{ marginTop: '8px', color: '#64748b' }}>
+                    When an employee is 30+ minutes late and has not clocked in, this email will receive the escalation notification in addition to managers and admins.
+                  </p>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  disabled={settingsSaving}
+                  onClick={async () => {
+                    setSettingsSaving(true);
+                    try {
+                      await api.patch('/settings/escalated-late-email', {
+                        escalatedLateEmail: escalatedLateEmail.trim() || null,
+                      });
+                      alert('Settings saved.');
+                    } catch (e: any) {
+                      alert(e.response?.data?.message || 'Failed to save settings');
+                    } finally {
+                      setSettingsSaving(false);
+                    }
+                  }}
+                >
+                  {settingsSaving ? 'Saving...' : 'Save'}
+                </button>
               </div>
             </div>
           )}

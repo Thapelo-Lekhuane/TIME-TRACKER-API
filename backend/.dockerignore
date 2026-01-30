@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+*.log
+.env
+.env.*
+!.env.example
+coverage
+.nyc_output
+*.md
+!README.md
+test
+*.spec.ts
+.eslintrc*
+.prettierrc

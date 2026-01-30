@@ -7,6 +7,7 @@ import { Campaign } from '../campaigns/campaign.entity';
 import { TimeEvent } from './time-event.entity';
 import { EventType } from '../event-types/event-type.entity';
 import { EmailService } from '../../common/services/email.service';
+import { SettingsService } from '../settings/settings.service';
 import { Role } from '../../common/enums/role.enum';
 
 interface LateNotification {
@@ -35,6 +36,7 @@ export class LateMonitoringService {
     @InjectRepository(EventType)
     private readonly eventTypeRepo: Repository<EventType>,
     private readonly emailService: EmailService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   // Run every minute to check for late arrivals
@@ -183,7 +185,25 @@ export class LateMonitoringService {
 
   private async escalateToManager(notification: LateNotification, campaign: Campaign) {
     try {
-      // Find managers in the campaign
+      const escalationPayload = {
+        employeeName: notification.userName,
+        employeeEmail: notification.userEmail,
+        campaignName: notification.campaignName,
+        lateMinutes: notification.lateMinutes,
+        isEscalation: true,
+      };
+
+      // Send to admin-configured escalated late email (System Admin assigns this)
+      const escalatedLateEmail = await this.settingsService.getEscalatedLateEmail();
+      if (escalatedLateEmail && escalatedLateEmail.trim()) {
+        await this.emailService.sendLateArrivalNotification({
+          ...escalationPayload,
+          toEmail: escalatedLateEmail.trim(),
+        });
+        this.logger.log(`Escalation sent to configured email: ${escalatedLateEmail}`);
+      }
+
+      // Also notify managers in the campaign and admins (avoid duplicate if same as escalated email)
       const managers = await this.userRepo.find({
         where: {
           campaign: { id: campaign.id },
@@ -191,22 +211,18 @@ export class LateMonitoringService {
         },
       });
 
-      // Also find admins
       const admins = await this.userRepo.find({
         where: { role: Role.ADMIN },
       });
 
-      const recipients = [...managers, ...admins];
-
-      for (const recipient of recipients) {
-        await this.emailService.sendLateArrivalNotification({
-          toEmail: recipient.email,
-          employeeName: notification.userName,
-          employeeEmail: notification.userEmail,
-          campaignName: notification.campaignName,
-          lateMinutes: notification.lateMinutes,
-          isEscalation: true,
-        });
+      const escalatedLower = escalatedLateEmail?.trim().toLowerCase() ?? '';
+      for (const recipient of [...managers, ...admins]) {
+        if (recipient.email.toLowerCase() !== escalatedLower) {
+          await this.emailService.sendLateArrivalNotification({
+            toEmail: recipient.email,
+            ...escalationPayload,
+          });
+        }
       }
     } catch (error) {
       this.logger.error('Error escalating to manager', error);

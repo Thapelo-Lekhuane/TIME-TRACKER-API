@@ -655,3 +655,18 @@ tbody tr:hover {
     border-radius: var(--radius);
     margin-bottom: var(--spacing-md);
 }
+
+/* Leave section collapsible dropdowns */
+.leave-dropdown summary::-webkit-details-marker {
+    display: none;
+}
+.leave-dropdown summary::after {
+    content: '▼';
+    font-size: 12px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+.leave-dropdown[open] summary::after {
+    content: '▼';
+    transform: rotate(180deg);
+}

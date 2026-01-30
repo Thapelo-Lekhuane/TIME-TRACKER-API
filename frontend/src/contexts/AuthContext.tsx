@@ -7,7 +7,15 @@ interface User {
   fullName: string;
   role: 'ADMIN' | 'MANAGER' | 'EMPLOYEE';
   designation?: string;
-  campaign?: { id: string; name: string } | null;
+  campaign?: {
+    id: string;
+    name: string;
+    workDayStart?: string | null;
+    workDayEnd?: string | null;
+    lunchStart?: string | null;
+    lunchEnd?: string | null;
+    teaBreaks?: { start: string; end: string }[] | null;
+  } | null;
 }
 
 interface AuthContextType {

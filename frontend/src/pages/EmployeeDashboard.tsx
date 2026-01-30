@@ -241,10 +241,82 @@ const EmployeeDashboard = () => {
     day: 'numeric',
   });
 
-  const workHours = Math.floor(totalWorkMinutes / 60);
-  const workMins = Math.round(totalWorkMinutes % 60);
+  // Format campaign time strings (e.g. "09:00:00" or "09:00") for display
+  const formatTime = (t: string) => {
+    if (!t) return '';
+    const parts = t.trim().split(':');
+    const h = parseInt(parts[0] || '0', 10);
+    const m = parseInt(parts[1] || '0', 10);
+    if (isNaN(h) || isNaN(m)) return t;
+    const date = new Date(2000, 0, 1, h, m);
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  };
+
+  // Display work minutes: completed segments + live segment from current "Start Work" (updates every second)
+  const getDisplayWorkMinutes = () => {
+    if (todayEvents.length === 0) return 0;
+    const sorted = [...todayEvents].sort((a, b) =>
+      new Date(a.timestampUtc).getTime() - new Date(b.timestampUtc).getTime()
+    );
+    let completedWork = 0;
+    let currentStart: Date | null = null;
+    for (const event of sorted) {
+      const ts = new Date(event.timestampUtc);
+      const name = event.eventType?.name || '';
+      if (name.includes('Work Start')) currentStart = ts;
+      else if (name.includes('Work End')) {
+        if (currentStart) completedWork += (ts.getTime() - currentStart.getTime()) / 60000;
+        currentStart = null;
+      } else if (name.includes('Lunch Start') || name.includes('Break Start')) {
+        if (currentStart) completedWork += (ts.getTime() - currentStart.getTime()) / 60000;
+        currentStart = null;
+      } else if (name.includes('Lunch End') || name.includes('Break End')) currentStart = ts;
+    }
+    const live = currentStart
+      ? (currentTime.getTime() - currentStart.getTime()) / 60000
+      : 0;
+    return completedWork + live;
+  };
+  const displayWorkMinutes = getDisplayWorkMinutes();
+  const workHours = Math.floor(displayWorkMinutes / 60);
+  const workMins = Math.round(displayWorkMinutes % 60);
   const regularHours = 8 * 60;
-  const overtimeMinutes = Math.max(0, totalWorkMinutes - regularHours);
+  const overtimeMinutes = Math.max(0, displayWorkMinutes - regularHours);
+
+  // Check if today falls within an approved leave request (date-only comparison)
+  const isOnApprovedLeaveToday = (() => {
+    const todayStr = currentTime.toISOString().split('T')[0];
+    const today = new Date(todayStr);
+    return myLeaveRequests.some((r) => {
+      if (r.status !== 'APPROVED') return false;
+      const start = new Date(r.startUtc);
+      const end = new Date(r.endUtc);
+      const startStr = start.toISOString().split('T')[0];
+      const endStr = end.toISOString().split('T')[0];
+      return todayStr >= startStr && todayStr <= endStr;
+    });
+  })();
+
+  // Late: has campaign work start, past that time, no clock-in today, not on approved leave
+  const hasWorkStartToday = todayEvents.some(
+    (e) => e.eventType?.name?.includes?.('Work Start')
+  );
+  const workDayStartMinutes = (() => {
+    const t = user?.campaign?.workDayStart;
+    if (!t) return null;
+    const parts = t.trim().split(':');
+    const h = parseInt(parts[0] || '0', 10);
+    const m = parseInt(parts[1] || '0', 10);
+    return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+  })();
+  const nowMinutes =
+    currentTime.getHours() * 60 + currentTime.getMinutes() + currentTime.getSeconds() / 60;
+  const isLate =
+    !!user?.campaign?.workDayStart &&
+    workDayStartMinutes != null &&
+    nowMinutes > workDayStartMinutes &&
+    !hasWorkStartToday &&
+    !isOnApprovedLeaveToday;
 
   return (
     <div className="dashboard">
@@ -256,7 +328,7 @@ const EmployeeDashboard = () => {
         </button>
         <div className="logo">TimeTrack</div>
         <div className="user-info">
-          <span>Welcome, {user?.fullName} ({user?.role})</span>
+          <span>Welcome, {user?.fullName}{user?.designation ? ` (${user.designation})` : user?.role ? ` (${user.role})` : ''}</span>
           <span className="logout-btn" onClick={logout}>Logout</span>
         </div>
       </div>
@@ -319,6 +391,67 @@ const EmployeeDashboard = () => {
                   </p>
                 </div>
               )}
+
+              {isLate && (
+                <div className="late-alert" style={{
+                  backgroundColor: '#eff6ff',
+                  border: '1px solid var(--primary)',
+                  borderRadius: 'var(--radius)',
+                  padding: 'var(--spacing-md) var(--spacing-lg)',
+                  marginBottom: 'var(--spacing-md)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--spacing-sm)',
+                }}>
+                  <span style={{ fontSize: '20px' }} role="img" aria-label="Warning">⚠️</span>
+                  <div>
+                    <strong style={{ color: 'var(--primary-active)' }}>You are late</strong>
+                    <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                      You have not clocked in yet. Your scheduled work start has passed. Please clock in now.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {user?.campaign && (
+                <div className="campaign-schedule-card" style={{
+                  backgroundColor: '#eff6ff',
+                  border: '1px solid var(--primary)',
+                  borderRadius: 'var(--radius)',
+                  padding: 'var(--spacing-lg)',
+                  marginBottom: 'var(--spacing-md)',
+                }}>
+                  <h3 style={{ color: 'var(--primary-active)', marginBottom: 'var(--spacing-sm)' }}>My campaign & schedule</h3>
+                  <p style={{ fontWeight: 600, color: 'var(--primary)', marginBottom: 'var(--spacing-md)' }}>
+                    {user.campaign.name}
+                  </p>
+                  <div style={{ display: 'grid', gap: 'var(--spacing-sm)', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                    {user.campaign.workDayStart != null && user.campaign.workDayEnd != null && (
+                      <div>
+                        <strong>Work times:</strong> {formatTime(user.campaign.workDayStart)} – {formatTime(user.campaign.workDayEnd)}
+                      </div>
+                    )}
+                    {user.campaign.lunchStart != null && user.campaign.lunchEnd != null && (
+                      <div>
+                        <strong>Lunch break:</strong> {formatTime(user.campaign.lunchStart)} – {formatTime(user.campaign.lunchEnd)}
+                      </div>
+                    )}
+                    {user.campaign.teaBreaks && user.campaign.teaBreaks.length > 0 && (
+                      <div>
+                        <strong>Tea / short breaks:</strong>
+                        <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                          {user.campaign.teaBreaks.map((tb, i) => (
+                            <li key={i}>{formatTime(tb.start)} – {formatTime(tb.end)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {(!user.campaign.workDayStart && !user.campaign.lunchStart && (!user.campaign.teaBreaks || user.campaign.teaBreaks.length === 0)) && (
+                      <div style={{ color: 'var(--text-muted)' }}>No specific times set for this campaign.</div>
+                    )}
+                  </div>
+                </div>
+              )}
               
               <div className="clock-card">
                 <div className="current-time">{timeFormatter.format(currentTime)}</div>
@@ -366,7 +499,7 @@ const EmployeeDashboard = () => {
                     End Lunch
                   </button>
                 )}
-                {breakStartType && status === 'working' && (
+                {breakStartType && status === 'working' && user?.campaign?.teaBreaks && user.campaign.teaBreaks.length > 0 && (
                   <button
                     className="btn action-btn-teal"
                     onClick={() => handleClockAction(breakStartType.id)}
@@ -375,7 +508,7 @@ const EmployeeDashboard = () => {
                     Start Break
                   </button>
                 )}
-                {breakEndType && status === 'break' && (
+                {breakEndType && status === 'break' && user?.campaign?.teaBreaks && user.campaign.teaBreaks.length > 0 && (
                   <button
                     className="btn action-btn-teal"
                     onClick={() => handleClockAction(breakEndType.id)}
@@ -493,48 +626,7 @@ const EmployeeDashboard = () => {
                 </div>
               ) : (
                 <>
-                  {/* Leave Balances Section */}
-                  <h3>My Leave Balances ({new Date().getFullYear()})</h3>
-                  <div className="table-container" style={{ marginBottom: 'var(--spacing-lg)' }}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Leave Type</th>
-                          <th>Entitled</th>
-                          <th>Used</th>
-                          <th>Pending</th>
-                          <th>Remaining</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {leaveBalances.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="text-center">No leave entitlements assigned yet. Contact your admin.</td>
-                          </tr>
-                        ) : (
-                          leaveBalances.map(balance => (
-                            <tr key={balance.leaveType.id}>
-                              <td>{balance.leaveType.name}</td>
-                              <td><strong>{balance.entitledDays}</strong></td>
-                              <td>{balance.usedDays}</td>
-                              <td>{balance.pendingDays}</td>
-                              <td>
-                                <span style={{ 
-                                  color: balance.remainingDays <= 0 ? 'var(--danger)' : 
-                                         balance.remainingDays <= 3 ? 'var(--warning)' : 'var(--success)',
-                                  fontWeight: 600 
-                                }}>
-                                  {balance.remainingDays}
-                                </span>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="stats-grid">
+                  <div className="stats-grid" style={{ marginBottom: 'var(--spacing-md)' }}>
                     <div className="stat-card">
                       <div className="stat-value">{myLeaveRequests.length}</div>
                       <div className="stat-label">Total Requests</div>
@@ -555,59 +647,141 @@ const EmployeeDashboard = () => {
                   
                   <button 
                     className="btn btn-primary" 
-                    style={{ marginBottom: 'var(--spacing-lg)', marginTop: 'var(--spacing-md)' }}
+                    style={{ marginBottom: 'var(--spacing-lg)' }}
                     onClick={() => setShowLeaveForm(true)}
                   >
                     Request New Leave
                   </button>
-                  
-                  <h3 style={{ marginTop: 'var(--spacing-md)' }}>My Leave Requests</h3>
-                  <div className="table-container">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Leave Type</th>
-                          <th>Start Date</th>
-                          <th>End Date</th>
-                          <th>Days</th>
-                          <th>Status</th>
-                          <th>Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {myLeaveRequests.length === 0 ? (
+
+                  {/* Leave Balances – collapsible */}
+                  <details className="leave-dropdown" style={{
+                    marginBottom: 'var(--spacing-md)',
+                    border: '1px solid var(--border-light)',
+                    borderRadius: 'var(--radius)',
+                    overflow: 'hidden',
+                  }}>
+                    <summary style={{
+                      padding: 'var(--spacing-md) var(--spacing-lg)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      backgroundColor: 'var(--bg-secondary, #f8f9fa)',
+                      listStyle: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ flex: 1 }}>My Leave Balances ({new Date().getFullYear()})</span>
+                      <span className="leave-dropdown-count" style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                        {leaveBalances.length} type{leaveBalances.length !== 1 ? 's' : ''}
+                      </span>
+                    </summary>
+                    <div className="table-container" style={{ margin: 0 }}>
+                      <table>
+                        <thead>
                           <tr>
-                            <td colSpan={6} className="text-center">No leave requests yet</td>
+                            <th>Leave Type</th>
+                            <th>Entitled</th>
+                            <th>Used</th>
+                            <th>Pending</th>
+                            <th>Remaining</th>
                           </tr>
-                        ) : (
-                          myLeaveRequests.map(request => {
-                            const startDate = new Date(request.startUtc);
-                            const endDate = new Date(request.endUtc);
-                            const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                            
-                            return (
-                              <tr key={request.id}>
-                                <td>{request.leaveType.name}</td>
-                                <td>{startDate.toLocaleDateString()}</td>
-                                <td>{endDate.toLocaleDateString()}</td>
-                                <td>{days} day(s)</td>
+                        </thead>
+                        <tbody>
+                          {leaveBalances.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="text-center">No leave entitlements assigned yet. Contact your admin.</td>
+                            </tr>
+                          ) : (
+                            leaveBalances.map(balance => (
+                              <tr key={balance.leaveType.id}>
+                                <td>{balance.leaveType.name}</td>
+                                <td><strong>{balance.entitledDays}</strong></td>
+                                <td>{balance.usedDays}</td>
+                                <td>{balance.pendingDays}</td>
                                 <td>
-                                  <span className={`badge ${
-                                    request.status === 'APPROVED' ? 'badge-present' :
-                                    request.status === 'REJECTED' ? 'badge-absent' :
-                                    request.status === 'PENDING' ? 'badge-pending' : 'badge-inactive'
-                                  }`}>
-                                    {request.status}
+                                  <span style={{
+                                    color: balance.remainingDays <= 0 ? 'var(--danger)' :
+                                           balance.remainingDays <= 3 ? 'var(--warning)' : 'var(--success)',
+                                    fontWeight: 600
+                                  }}>
+                                    {balance.remainingDays}
                                   </span>
                                 </td>
-                                <td>{request.reason || '-'}</td>
                               </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+
+                  {/* My Leave Requests – collapsible */}
+                  <details className="leave-dropdown" style={{
+                    border: '1px solid var(--border-light)',
+                    borderRadius: 'var(--radius)',
+                    overflow: 'hidden',
+                  }}>
+                    <summary style={{
+                      padding: 'var(--spacing-md) var(--spacing-lg)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      backgroundColor: 'var(--bg-secondary, #f8f9fa)',
+                      listStyle: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ flex: 1 }}>My Leave Requests</span>
+                      <span className="leave-dropdown-count" style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                        {myLeaveRequests.length} request{myLeaveRequests.length !== 1 ? 's' : ''}
+                      </span>
+                    </summary>
+                    <div className="table-container" style={{ margin: 0 }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Leave Type</th>
+                            <th>Start Date</th>
+                            <th>End Date</th>
+                            <th>Days</th>
+                            <th>Status</th>
+                            <th>Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myLeaveRequests.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="text-center">No leave requests yet</td>
+                            </tr>
+                          ) : (
+                            myLeaveRequests.map(request => {
+                              const startDate = new Date(request.startUtc);
+                              const endDate = new Date(request.endUtc);
+                              const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                              return (
+                                <tr key={request.id}>
+                                  <td>{request.leaveType.name}</td>
+                                  <td>{startDate.toLocaleDateString()}</td>
+                                  <td>{endDate.toLocaleDateString()}</td>
+                                  <td>{days} day(s)</td>
+                                  <td>
+                                    <span className={`badge ${
+                                      request.status === 'APPROVED' ? 'badge-present' :
+                                      request.status === 'REJECTED' ? 'badge-absent' :
+                                      request.status === 'PENDING' ? 'badge-pending' : 'badge-inactive'
+                                    }`}>
+                                      {request.status}
+                                    </span>
+                                  </td>
+                                  <td>{request.reason || '-'}</td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
                 </>
               )}
             </div>

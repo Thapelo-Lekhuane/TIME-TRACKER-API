@@ -10,6 +10,7 @@ import { Campaign } from '../campaigns/campaign.entity';
 import { EventType } from '../event-types/event-type.entity';
 import { EventTypesModule } from '../event-types/event-types.module';
 import { EmailModule } from '../../common/services/email.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { EmailModule } from '../../common/services/email.module';
     ScheduleModule.forRoot(),
     EventTypesModule,
     EmailModule,
+    SettingsModule,
   ],
   controllers: [TimeEventsController],
   providers: [TimeEventsService, LateMonitoringService],
