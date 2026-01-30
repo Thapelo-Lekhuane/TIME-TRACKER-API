@@ -146,7 +146,7 @@ const ManagerDashboard = () => {
 
   useEffect(() => {
     fetchLeaveRequests();
-  }, [leaveFilterCampaign, leaveFilterStatus, dateRange]);
+  }, [leaveFilterCampaign, leaveFilterStatus]);
 
   const fetchCampaigns = async () => {
     try {
@@ -218,14 +218,13 @@ const ManagerDashboard = () => {
       if (leaveFilterCampaign) {
         params.push(`campaignId=${leaveFilterCampaign}`);
       }
-      if (dateRange.from && dateRange.to) {
-        params.push(`from=${dateRange.from}&to=${dateRange.to}`);
-      }
+      // Do not use main dashboard date range for leave approvals — show all pending by default
       url += params.join('&');
       const response = await api.get(url);
       setLeaveRequests(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch leave requests', error);
+      setLeaveRequests([]);
     }
   };
 
@@ -785,51 +784,15 @@ const ManagerDashboard = () => {
       <div className="dashboard-content">
         <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <nav className="sidebar-nav">
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'managerDashboard' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('managerDashboard'); }}
-            >
-              Dashboard
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'teamAttendance' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('teamAttendance'); }}
-            >
-              Team Attendance
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'leaveApprovals' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('leaveApprovals'); }}
-            >
-              Leave Approvals
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'reports' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('reports'); }}
-            >
-              Reports
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'campaigns' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('campaigns'); }}
-            >
-              Campaigns
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'teamLeaders' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('teamLeaders'); }}
-            >
-              Team Leaders
-            </a>
+            <a href="#" className={`sidebar-link ${currentSection === 'managerDashboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('managerDashboard'); setSidebarOpen(false); }}>Dashboard</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'teamAttendance' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('teamAttendance'); setSidebarOpen(false); }}>Team Attendance</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leaveApprovals' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leaveApprovals'); setSidebarOpen(false); }}>Leave Approvals</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'reports' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('reports'); setSidebarOpen(false); }}>Reports</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'campaigns' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('campaigns'); setSidebarOpen(false); }}>Campaigns</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'teamLeaders' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('teamLeaders'); setSidebarOpen(false); }}>Team Leaders</a>
           </nav>
         </div>
-        
+        {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
         <div className="main-content">
           {currentSection === 'managerDashboard' && (
             <div className="section">
@@ -1280,7 +1243,9 @@ const ManagerDashboard = () => {
                       })}
                       {leaveRequests.length === 0 && (
                         <tr>
-                          <td colSpan={9} className="text-center">No leave requests found</td>
+                          <td colSpan={9} className="text-center">
+                            No leave requests found. Try &quot;All Statuses&quot; or &quot;All Campaigns&quot;. If you are a manager, ensure you are assigned to the employee&apos;s campaign, or set your email as Leave Approver for that campaign (Admin: Campaigns → Leave Approver Email), or add yourself as Team Leader.
+                          </td>
                         </tr>
                       )}
                     </>

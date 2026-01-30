@@ -575,15 +575,45 @@ tbody tr:hover {
     margin-bottom: var(--spacing-sm);
 }
 
+/* Sidebar backdrop (mobile) - tap outside to close; rendered by React when sidebar open */
+.sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    top: 52px;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 85;
+    -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 769px) {
+    .sidebar-backdrop {
+        display: none !important;
+    }
+}
+
+@media (max-width: 360px) {
+    .sidebar-backdrop {
+        top: 48px;
+    }
+    .top-bar {
+        min-height: 48px;
+    }
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
+    .top-bar {
+        min-height: 52px;
+    }
     .sidebar {
         position: fixed;
-        left: -240px;
-        top: 68px;
+        left: -260px;
+        top: 52px;
         bottom: 0;
+        width: 260px;
+        max-width: 85vw;
         z-index: 90;
-        transition: left 0.3s;
+        transition: left 0.25s ease;
         box-shadow: var(--shadow-lg);
     }
     
@@ -593,14 +623,20 @@ tbody tr:hover {
     
     .hamburger {
         display: flex;
+        min-width: 44px;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
     }
     
     .main-content {
-        padding: var(--spacing-md);
+        padding: var(--spacing-sm);
+        min-width: 0;
     }
     
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
+        gap: var(--spacing-sm);
     }
     
     .role-selector {
@@ -610,16 +646,269 @@ tbody tr:hover {
     .filters {
         flex-direction: column;
         align-items: stretch;
+        padding: var(--spacing-sm);
+        gap: var(--spacing-sm);
+    }
+    
+    .filter-group {
+        flex-wrap: wrap;
+    }
+    
+    .section {
+        padding: var(--spacing-md);
+    }
+    
+    .section h2 {
+        font-size: 20px;
+    }
+    
+    table {
+        min-width: 600px;
+        font-size: 13px;
+    }
+    
+    th, td {
+        padding: 10px 8px;
+    }
+    
+    .table-container {
+        margin-left: calc(-1 * var(--spacing-sm));
+        margin-right: calc(-1 * var(--spacing-sm));
+        width: calc(100% + 2 * var(--spacing-sm));
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .btn, .btn-sm {
+        min-height: 44px;
+    }
+    
+    .btn-sm {
+        padding: 8px 12px;
     }
 }
 
 @media (max-width: 480px) {
+    .top-bar {
+        padding: 8px var(--spacing-xs);
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .logo {
+        font-size: 18px;
+    }
+    
+    .user-info {
+        font-size: 13px;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    
+    .user-info span:first-child {
+        width: 100%;
+        order: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
     .stats-grid {
         grid-template-columns: 1fr;
+        gap: var(--spacing-xs);
+    }
+    
+    .stat-card {
+        padding: var(--spacing-sm);
+    }
+    
+    .stat-value {
+        font-size: 26px;
     }
     
     .login-card {
-        padding: var(--spacing-lg);
+        padding: var(--spacing-md);
+    }
+    
+    .main-content {
+        padding: var(--spacing-xs);
+    }
+    
+    .section {
+        padding: var(--spacing-sm);
+    }
+    
+    .section h2 {
+        font-size: 18px;
+    }
+    
+    .clock-card {
+        padding: var(--spacing-md);
+    }
+    
+    .current-time {
+        font-size: 36px;
+    }
+    
+    .current-date {
+        font-size: 14px;
+    }
+    
+    .action-btn {
+        min-height: 52px;
+        font-size: 16px;
+    }
+    
+    .summary-bar {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-sm);
+    }
+}
+
+/* Small phones (360px and below) */
+@media (max-width: 360px) {
+    body {
+        font-size: 14px;
+    }
+    
+    .top-bar {
+        min-height: 48px;
+    }
+    
+    .sidebar {
+        top: 48px;
+        width: 100%;
+        max-width: 280px;
+    }
+    
+    .sidebar-backdrop {
+        top: 48px;
+    }
+    
+    .dashboard-content {
+        min-height: calc(100vh - 48px);
+    }
+    
+    h1 { font-size: 22px; }
+    h2 { font-size: 18px; }
+    h3 { font-size: 16px; }
+    
+    .form-input {
+        padding: 12px;
+        font-size: 16px;
+    }
+    
+    .btn {
+        padding: 12px 16px;
+        min-height: 44px;
+        font-size: 15px;
+    }
+    
+    .btn-sm {
+        padding: 6px 10px;
+        min-height: 40px;
+        font-size: 13px;
+    }
+    
+    .sidebar-link {
+        padding: 12px 14px;
+        font-size: 14px;
+    }
+    
+    table {
+        min-width: 500px;
+        font-size: 12px;
+    }
+    
+    th, td {
+        padding: 8px 6px;
+    }
+    
+    .stat-value {
+        font-size: 22px;
+    }
+    
+    .current-time {
+        font-size: 32px;
+    }
+    
+    .login-screen {
+        padding: var(--spacing-sm);
+    }
+    
+    .login-card {
+        padding: var(--spacing-sm);
+    }
+}
+
+/* Smallest screens (320px) */
+@media (max-width: 320px) {
+    .top-bar {
+        padding: 6px var(--spacing-xs);
+    }
+    
+    .logo {
+        font-size: 16px;
+    }
+    
+    .main-content {
+        padding: 6px;
+    }
+    
+    .section {
+        padding: 8px;
+    }
+    
+    .section h2 {
+        font-size: 16px;
+    }
+    
+    .stats-grid {
+        gap: 6px;
+    }
+    
+    .stat-card {
+        padding: 10px;
+    }
+    
+    .stat-value {
+        font-size: 20px;
+    }
+    
+    .stat-label {
+        font-size: 12px;
+    }
+    
+    .filters {
+        padding: 8px;
+    }
+    
+    .filter-group label {
+        font-size: 13px;
+    }
+    
+    .form-input,
+    select.form-input {
+        font-size: 16px;
+        padding: 10px;
+    }
+    
+    .current-time {
+        font-size: 28px;
+    }
+    
+    .table-container {
+        margin-left: -6px;
+        margin-right: -6px;
+        width: calc(100% + 12px);
+    }
+    
+    table {
+        min-width: 440px;
+    }
+    
+    th, td {
+        padding: 6px 4px;
+        font-size: 11px;
     }
 }
 

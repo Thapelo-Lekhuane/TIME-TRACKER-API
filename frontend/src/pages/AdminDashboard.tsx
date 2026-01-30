@@ -48,6 +48,9 @@ const AdminDashboard = () => {
   const [eventTypes, setEventTypes] = useState<EventType[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [allLeaveBalances, setAllLeaveBalances] = useState<any[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
+  const [leaveFilterCampaign, setLeaveFilterCampaign] = useState<string>('');
+  const [leaveFilterStatus, setLeaveFilterStatus] = useState<string>('PENDING');
   
   // Leave entitlement modal state
   const [showEntitlementModal, setShowEntitlementModal] = useState(false);
@@ -114,6 +117,43 @@ const AdminDashboard = () => {
     fetchLeaveTypes();
     fetchAllLeaveBalances();
   }, []);
+
+  useEffect(() => {
+    if (currentSection === 'leaveApprovals') fetchLeaveRequests();
+  }, [currentSection, leaveFilterCampaign, leaveFilterStatus]);
+
+  const fetchLeaveRequests = async () => {
+    try {
+      let url = '/leave-requests?';
+      const params: string[] = [];
+      if (leaveFilterStatus) params.push(`status=${leaveFilterStatus}`);
+      if (leaveFilterCampaign) params.push(`campaignId=${leaveFilterCampaign}`);
+      url += params.join('&');
+      const response = await api.get(url);
+      setLeaveRequests(response.data);
+    } catch (error: any) {
+      console.error('Failed to fetch leave requests', error);
+      setLeaveRequests([]);
+    }
+  };
+
+  const handleApproveLeave = async (id: string) => {
+    try {
+      await api.patch(`/leave-requests/${id}`, { status: 'APPROVED' });
+      fetchLeaveRequests();
+    } catch (error: any) {
+      alert(error.response?.data?.message || 'Failed to approve');
+    }
+  };
+
+  const handleRejectLeave = async (id: string) => {
+    try {
+      await api.patch(`/leave-requests/${id}`, { status: 'REJECTED' });
+      fetchLeaveRequests();
+    } catch (error: any) {
+      alert(error.response?.data?.message || 'Failed to reject');
+    }
+  };
 
   useEffect(() => {
     if (currentSection === 'systemSettings') {
@@ -410,72 +450,19 @@ const AdminDashboard = () => {
       <div className="dashboard-content">
         <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <nav className="sidebar-nav">
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'adminDashboard' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('adminDashboard'); }}
-            >
-              Dashboard
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'users' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('users'); }}
-            >
-              Users
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'campaigns' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('campaigns'); }}
-            >
-              Campaigns
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'eventTypes' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('eventTypes'); }}
-            >
-              Event Types
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'leaveTypes' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('leaveTypes'); }}
-            >
-              Leave Types
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'leaveSettings' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('leaveSettings'); }}
-            >
-              Leave Settings
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'leaveEntitlements' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('leaveEntitlements'); }}
-            >
-              Leave Entitlements
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'systemSettings' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('systemSettings'); }}
-            >
-              System Settings
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'reports' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('reports'); }}
-            >
-              Reports
-            </a>
+            <a href="#" className={`sidebar-link ${currentSection === 'adminDashboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('adminDashboard'); setSidebarOpen(false); }}>Dashboard</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'users' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('users'); setSidebarOpen(false); }}>Users</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'campaigns' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('campaigns'); setSidebarOpen(false); }}>Campaigns</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'eventTypes' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('eventTypes'); setSidebarOpen(false); }}>Event Types</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leaveTypes' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leaveTypes'); setSidebarOpen(false); }}>Leave Types</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leaveSettings' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leaveSettings'); setSidebarOpen(false); }}>Leave Settings</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leaveEntitlements' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leaveEntitlements'); setSidebarOpen(false); }}>Leave Entitlements</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leaveApprovals' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leaveApprovals'); setSidebarOpen(false); }}>Leave Approvals</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'systemSettings' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('systemSettings'); setSidebarOpen(false); }}>System Settings</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'reports' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('reports'); setSidebarOpen(false); }}>Reports</a>
           </nav>
         </div>
-        
+        {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
         <div className="main-content">
           {currentSection === 'adminDashboard' && (
             <div className="section">
@@ -886,6 +873,114 @@ SMTP_FROM=noreply@example.com`}
               <div style={{ marginTop: 'var(--spacing-lg)', backgroundColor: 'var(--card-light)', padding: 'var(--spacing-md)', borderRadius: 'var(--radius)' }}>
                 <h4>Quick Assign Leave Days</h4>
                 <p className="text-small">Use the button above to assign annual leave entitlements to employees. When leave is approved, the used days will automatically increase.</p>
+              </div>
+            </div>
+          )}
+
+          {currentSection === 'leaveApprovals' && (
+            <div className="section">
+              <h2>Leave Approvals</h2>
+              <p className="text-small">Review and approve team leave requests (all campaigns)</p>
+              <div className="filters" style={{ marginBottom: 'var(--spacing-md)' }}>
+                <div className="filter-group">
+                  <label className="form-label">Campaign:</label>
+                  <select
+                    className="form-input"
+                    style={{ width: '200px' }}
+                    value={leaveFilterCampaign}
+                    onChange={(e) => setLeaveFilterCampaign(e.target.value)}
+                  >
+                    <option value="">All Campaigns</option>
+                    {campaigns.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="filter-group">
+                  <label className="form-label">Status:</label>
+                  <select
+                    className="form-input"
+                    style={{ width: '150px' }}
+                    value={leaveFilterStatus}
+                    onChange={(e) => setLeaveFilterStatus(e.target.value)}
+                  >
+                    <option value="PENDING">Pending</option>
+                    <option value="APPROVED">Approved</option>
+                    <option value="REJECTED">Rejected</option>
+                    <option value="CANCELED">Canceled</option>
+                    <option value="">All Statuses</option>
+                  </select>
+                </div>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>Campaign</th>
+                      <th>Leave Type</th>
+                      <th>Start Date</th>
+                      <th>End Date</th>
+                      <th>Days</th>
+                      <th>Reason</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaveRequests.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center">No leave requests found. Try &quot;All Statuses&quot; or &quot;All Campaigns&quot;.</td>
+                      </tr>
+                    ) : (
+                      leaveRequests.map(req => {
+                        const startDate = new Date(req.startUtc);
+                        const endDate = new Date(req.endUtc);
+                        const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                        return (
+                          <tr key={req.id}>
+                            <td>{req.user?.fullName}</td>
+                            <td>{req.campaign?.name || '-'}</td>
+                            <td>{req.leaveType?.name}</td>
+                            <td>{startDate.toLocaleDateString()}</td>
+                            <td>{endDate.toLocaleDateString()}</td>
+                            <td>{days}</td>
+                            <td>{req.reason || '-'}</td>
+                            <td>
+                              <span className={`badge badge-${req.status?.toLowerCase() || 'pending'}`}>
+                                {req.status || 'Pending'}
+                              </span>
+                            </td>
+                            <td>
+                              {req.status === 'PENDING' && (
+                                <>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => handleApproveLeave(req.id)}
+                                    style={{ marginRight: '8px' }}
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    className="btn btn-danger btn-sm"
+                                    onClick={() => handleRejectLeave(req.id)}
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+                              {req.status !== 'PENDING' && (
+                                <span className="text-small" style={{ color: 'var(--text-muted)' }}>
+                                  {req.approvedBy ? `By ${typeof req.approvedBy === 'object' ? req.approvedBy?.fullName : req.approvedBy}` : 'Processed'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

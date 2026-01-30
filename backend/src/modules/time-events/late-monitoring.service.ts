@@ -185,6 +185,14 @@ export class LateMonitoringService {
 
   private async escalateToManager(notification: LateNotification, campaign: Campaign) {
     try {
+      const today = new Date().toISOString().split('T')[0];
+
+      // Send entire escalation (escalator + managers + admins) only once per user per day (persisted across restarts)
+      const alreadySent = await this.settingsService.wasEscalationSentToEscalator(notification.userId, today);
+      if (alreadySent) {
+        return; // Already sent for this user today — do not send to anyone
+      }
+
       const escalationPayload = {
         employeeName: notification.userName,
         employeeEmail: notification.userEmail,
@@ -193,17 +201,15 @@ export class LateMonitoringService {
         isEscalation: true,
       };
 
-      // Send to admin-configured escalated late email (System Admin assigns this)
       const escalatedLateEmail = await this.settingsService.getEscalatedLateEmail();
       if (escalatedLateEmail && escalatedLateEmail.trim()) {
         await this.emailService.sendLateArrivalNotification({
           ...escalationPayload,
           toEmail: escalatedLateEmail.trim(),
         });
-        this.logger.log(`Escalation sent to configured email: ${escalatedLateEmail}`);
+        this.logger.log(`Escalation sent once to configured email: ${escalatedLateEmail}`);
       }
 
-      // Also notify managers in the campaign and admins (avoid duplicate if same as escalated email)
       const managers = await this.userRepo.find({
         where: {
           campaign: { id: campaign.id },
@@ -224,6 +230,8 @@ export class LateMonitoringService {
           });
         }
       }
+
+      await this.settingsService.markEscalationSentToEscalator(notification.userId, today);
     } catch (error) {
       this.logger.error('Error escalating to manager', error);
     }

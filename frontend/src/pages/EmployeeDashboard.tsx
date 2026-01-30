@@ -335,37 +335,13 @@ const EmployeeDashboard = () => {
       <div className="dashboard-content">
         <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <nav className="sidebar-nav">
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'dashboard' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('dashboard'); }}
-            >
-              Dashboard
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'timesheet' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('timesheet'); }}
-            >
-              My Timesheet
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'leave' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('leave'); }}
-            >
-              Leave Requests
-            </a>
-            <a
-              href="#"
-              className={`sidebar-link ${currentSection === 'profile' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); setCurrentSection('profile'); }}
-            >
-              Profile
-            </a>
+            <a href="#" className={`sidebar-link ${currentSection === 'dashboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('dashboard'); setSidebarOpen(false); }}>Dashboard</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'timesheet' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('timesheet'); setSidebarOpen(false); }}>My Timesheet</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'leave' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('leave'); setSidebarOpen(false); }}>Leave Requests</a>
+            <a href="#" className={`sidebar-link ${currentSection === 'profile' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setCurrentSection('profile'); setSidebarOpen(false); }}>Profile</a>
           </nav>
         </div>
-        
+        {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
         <div className="main-content">
           {currentSection === 'dashboard' && (
             <div className="section">

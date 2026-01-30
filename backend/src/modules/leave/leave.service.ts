@@ -311,6 +311,18 @@ export class LeaveService {
     };
   }
 
+  /** Normalize email for leave-approver matching (e.g. gmai.com -> gmail.com) so both spellings match */
+  private normalizeEmailForMatch(email: string): string {
+    if (!email || !email.includes('@')) return email;
+    const [local, domain] = email.split('@');
+    const domainNorm = domain
+      .replace(/^gmai\.com$/i, 'gmail.com')
+      .replace(/^gmial\.com$/i, 'gmail.com')
+      .replace(/^gmail\.co$/i, 'gmail.com')
+      .replace(/^gmal\.com$/i, 'gmail.com');
+    return `${local}@${domainNorm}`;
+  }
+
   // Get leave requests for a specific user (their own requests)
   async findMyLeaveRequests(userId: string) {
     const list = await this.leaveRequestRepo.find({
@@ -323,17 +335,57 @@ export class LeaveService {
 
   async findLeaveRequests(query: { campaignId?: string; userId?: string; status?: LeaveStatus; from?: string; to?: string }, user: any) {
     let campaignIdFilter: string | null = query.campaignId || null;
+    let campaignIds: string[] | null = null; // for MANAGER: can be multiple campaigns
 
     if (user.role === Role.MANAGER) {
       const userEntity = await this.userRepo.findOne({
         where: { id: user.userId },
-        relations: ['campaign'],
+        relations: ['campaign', 'teamLeaderCampaigns'],
       });
-      if (userEntity?.campaign) {
-        campaignIdFilter = userEntity.campaign.id;
-      } else {
+      if (!userEntity) {
         return [];
       }
+      const ids: string[] = [];
+      // 1) Manager's assigned campaign
+      if (userEntity.campaign?.id && !ids.includes(userEntity.campaign.id)) {
+        ids.push(userEntity.campaign.id);
+      }
+      // 2) Campaigns where this user is the leave approver (by email); normalize common typos (e.g. gmai.com -> gmail.com)
+      const managerEmail = userEntity.email?.trim()?.toLowerCase();
+      const managerEmailNorm = managerEmail ? this.normalizeEmailForMatch(managerEmail) : '';
+      if (managerEmailNorm) {
+        const allCampaigns = await this.campaignRepo.find({
+          select: ['id', 'leaveApproverEmail'],
+        });
+        for (const c of allCampaigns) {
+          const approverNorm = c.leaveApproverEmail?.trim()?.toLowerCase()
+            ? this.normalizeEmailForMatch(c.leaveApproverEmail.trim().toLowerCase())
+            : '';
+          if (approverNorm && approverNorm === managerEmailNorm && !ids.includes(c.id)) {
+            ids.push(c.id);
+          }
+        }
+      }
+      // 3) Campaigns where this user is a team leader
+      if (userEntity.teamLeaderCampaigns?.length) {
+        for (const c of userEntity.teamLeaderCampaigns) {
+          if (c?.id && !ids.includes(c.id)) {
+            ids.push(c.id);
+          }
+        }
+      }
+      if (ids.length === 0) {
+        this.logger.warn(
+          `Manager ${userEntity.email} (${user.userId}) has no campaigns for leave approvals: not assigned, not leave approver, not team leader. Returning empty list.`,
+        );
+        return [];
+      }
+      if (query.campaignId && ids.includes(query.campaignId)) {
+        campaignIds = [query.campaignId];
+      } else {
+        campaignIds = ids;
+      }
+      campaignIdFilter = null;
     }
 
     const queryBuilder = this.leaveRequestRepo
@@ -342,8 +394,10 @@ export class LeaveService {
       .leftJoinAndSelect('leaveRequest.campaign', 'campaign')
       .leftJoinAndSelect('leaveRequest.leaveType', 'leaveType');
 
-    if (campaignIdFilter) {
-      queryBuilder.andWhere('leaveRequest.campaignId = :campaignId', { campaignId: campaignIdFilter });
+    if (campaignIds && campaignIds.length > 0) {
+      queryBuilder.andWhere('campaign.id IN (:...campaignIds)', { campaignIds });
+    } else if (campaignIdFilter) {
+      queryBuilder.andWhere('campaign.id = :campaignId', { campaignId: campaignIdFilter });
     }
     if (query.userId) {
       queryBuilder.andWhere('leaveRequest.userId = :userId', { userId: query.userId });
@@ -370,6 +424,11 @@ export class LeaveService {
     }
 
     const list = await queryBuilder.orderBy('leaveRequest.startUtc', 'DESC').getMany();
+    if (user.role === Role.MANAGER && (campaignIds?.length ?? 0) > 0) {
+      this.logger.log(
+        `Leave requests for manager: campaigns=${campaignIds?.length ?? 0}, status=${query.status ?? 'all'}, returned ${list.length} request(s)`,
+      );
+    }
     return list.map((lr) => this.toLeaveRequestResponse(lr));
   }
 
